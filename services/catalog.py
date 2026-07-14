@@ -5,8 +5,53 @@ from pathlib import Path
 from typing import Any
 import pandas as pd
 import requests
+from threading import RLock
 
 REQUIRED_COLUMNS = ["Descripcion", "Precio_Venta_Final", "IdArticulo", "Stock"]
+
+
+class LastValidStore:
+    def __init__(self):
+        self._values = {}
+        self._lock = RLock()
+
+    def get(self, key):
+        with self._lock:
+            return self._values.get(key)
+
+    def set(self, key, value):
+        with self._lock:
+            self._values[key] = value
+
+
+def metadata_version(metadata: dict) -> str:
+    for key in ("modifiedTime", "md5Checksum", "size", "Last-Modified", "Content-Length", "etag"):
+        value = metadata.get(key)
+        if value not in (None, ""):
+            return f"{key}:{value}"
+    return "unknown"
+
+
+def needs_refresh(cached, version: str) -> bool:
+    return cached is None or cached[1] != version
+
+
+def recover_source(store: LastValidStore, key: str, fallback_loader):
+    cached = store.get(key)
+    if cached is not None:
+        return cached[0], cached[1], "última caché válida"
+    return fallback_loader(), "fallback", "fallback local"
+
+
+def build_reduced_catalog(products: pd.DataFrame, rules: pd.DataFrame, images: dict) -> pd.DataFrame:
+    product_fields = products[["sku", "name", "price", "stock"]].copy()
+    catalog = rules[["sku", "category", "pack_units"]].merge(product_fields, on="sku", how="inner")
+    catalog["image_url"] = catalog["sku"].map(images).fillna("")
+    return catalog[["sku", "name", "price", "stock", "category", "pack_units", "image_url"]].drop_duplicates("sku", keep="last")
+
+
+def optional_products(catalog: pd.DataFrame, category: str) -> pd.DataFrame:
+    return catalog[(catalog["category"] == category) & (catalog["stock"] > 0)].copy()
 
 
 def normalize_sku(value: Any) -> str:
@@ -97,7 +142,13 @@ def public_drive_metadata(file_id: str) -> dict:
     # Sin credenciales Google no expone modifiedTime de forma fiable. Se usa encabezado HTTP si existe.
     r=requests.get(f"https://drive.google.com/uc?export=download&id={file_id}", stream=True, timeout=20)
     r.raise_for_status()
-    return {"id":file_id,"name":"GOLOSINERO.CSV","modifiedTime":r.headers.get("Last-Modified"),"size":r.headers.get("Content-Length")}
+    return {"id":file_id,"name":"GOLOSINERO.CSV","Last-Modified":r.headers.get("Last-Modified"),"Content-Length":r.headers.get("Content-Length")}
+
+
+def public_sheet_metadata(file_id: str) -> dict:
+    r=requests.get(f"https://docs.google.com/spreadsheets/d/{file_id}/export?format=xlsx", stream=True, timeout=20)
+    r.raise_for_status()
+    return {"id": file_id, "Last-Modified": r.headers.get("Last-Modified"), "Content-Length": r.headers.get("Content-Length"), "etag": r.headers.get("ETag")}
 
 
 def drive_service(secrets):
