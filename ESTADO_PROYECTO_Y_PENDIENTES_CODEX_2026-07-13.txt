@@ -1,0 +1,396 @@
+ESTADO OFICIAL DEL PROYECTO
+Proyecto: cotilloncotyland/golosinero-streamlit
+Fecha: 2026-07-13
+
+============================================================
+1. REGLAS GENERALES DEL PROYECTO
+============================================================
+
+- No modificar engine/ salvo error funcional comprobado.
+- No romper generación, cobertura, sabores, variedad, perfiles ni lógica validada.
+- El parser del CSV ya funciona con más de 8.464 SKU.
+- El CSV se procesa por líneas físicas y separador ';'.
+- Nombre, precio y stock salen siempre del CSV oficial.
+- La planilla de reglas aporta solamente SKU, categoría marcada y DIVISIBLE.
+- services/ maneja datos, Drive, imágenes y PDF.
+- app.py maneja interfaz, flujo y estado.
+- El motor actual debe seguir siendo la única fuente de verdad para generar combos y calcular totales.
+
+============================================================
+2. CAMBIOS REALIZADOS HOY
+============================================================
+
+A. IMÁGENES Y JSON DE DRIVE
+
+Se detectaron dos carpetas distintas en Drive:
+
+1. Carpeta "Golosinero"
+   ID: 1grOdUkGeM2lLFBCqfEeuXRxjVZ3pRQD0
+   Contiene GOLOSINERO.CSV y JSON vacíos de 80 bytes creados por error.
+
+2. Carpeta "GOLOSINAS_STREAMLIT"
+   ID: 1VewexnNy_jfZZ8lu_HMdExaYvFyK75yZ
+   Contiene imagenes_productos, logo, planilla de reglas e imagenes_index.json correcto.
+
+El Apps Script estaba generando imagenes_index.json dentro de la carpeta equivocada.
+Se corrigió Code.gs para usar:
+
+const FOLDER_ID = '1VewexnNy_jfZZ8lu_HMdExaYvFyK75yZ';
+
+El CSV no se rompió porque se sigue leyendo por su propio ID:
+
+const STOCK_FILE_ID = '1D4gde-bbWlPw910hxaVQidpfIULShhS8';
+
+B. CORRECCIÓN DE REGENERACIÓN DEL JSON
+
+Antes, regenerarIndiceImagenes() enviaba el JSON anterior a la papelera y creaba uno nuevo, cambiando el ID cada vez.
+Se cambió por:
+
+if (old) {
+  old.setContent(json);
+} else {
+  root.createFile('imagenes_index.json', json, MimeType.PLAIN_TEXT);
+}
+
+Resultado:
+- conserva el mismo ID
+- cambia solo el contenido
+- actualiza modifiedTime
+- no crea duplicados nuevos
+- Streamlit puede seguir usando siempre el mismo images_index_file_id
+
+C. DIAGNÓSTICOS TEMPORALES
+
+Se agregó verificarCarpeta() para mostrar nombre e ID de carpeta, archivos, IDs, fechas, tamaños, URL y duplicados.
+Confirmó que el JSON correcto se genera dentro de GOLOSINAS_STREAMLIT.
+
+D. JSON OFICIAL DE IMÁGENES
+
+ID oficial:
+1fqSlwCqGvyB2W9W0b-3zZrvxp-KjHI4i
+
+Enlace:
+https://drive.google.com/file/d/1fqSlwCqGvyB2W9W0b-3zZrvxp-KjHI4i/view
+
+Estado:
+- se regeneró correctamente
+- generatedAt actualizado
+- contiene logoUrl
+- contiene SKU y URLs de imágenes
+- pasó de aproximadamente 7 KB a aproximadamente 10 KB
+- quedó como Cualquier persona con el enlace -> Lector
+
+E. STREAMLIT SECRETS
+
+Quedó configurado:
+
+[drive]
+stock_file_id = "1D4gde-bbWlPw910hxaVQidpfIULShhS8"
+images_index_file_id = "1fqSlwCqGvyB2W9W0b-3zZrvxp-KjHI4i"
+
+La app empezó a mostrar correctamente las imágenes nuevas después de hacer público el JSON y reiniciar Streamlit.
+
+F. FALLBACK DE IMÁGENES
+
+app.py oculta silenciosamente errores al cargar el JSON con:
+
+except Exception:
+    pass
+
+Cuando falla Drive usa data/imagenes_index_fallback.json.
+Pendiente: mantener fallback pero mostrar un aviso claro cuando se usa.
+
+G. PLANILLA DE REGLAS
+
+Se extendió la validación de datos de DIVISIBLE a filas nuevas mediante Pegado especial -> Solo validación de datos.
+El color no se copió porque no se pegó el formato. Esto no afecta el funcionamiento.
+La planilla se guarda automáticamente.
+
+ID oficial de la planilla:
+10kmGyYwpE4f-ujUgAigwDrQ7uS5DQHs_jQYxcFDNDQc
+
+Se comprobó que Streamlit todavía NO lee esta planilla.
+Actualmente app.py carga data/reglas_combos.xlsx.
+Por eso los SKU nuevos agregados en Google Sheets todavía no aparecen.
+
+H. CAMBIOS PREPARADOS PERO NO SUBIDOS
+
+Se prepararon cambios para conectar rules_file_id, pero NO se aplicaron al repositorio porque la integración GitHub devolvió error 403.
+No asumir que esos cambios están en GitHub.
+El repositorio real debe modificarse con Codex en la PC donde está clonado.
+
+============================================================
+3. CAMBIOS QUE CODEX DEBE HACER
+============================================================
+
+A. CONECTAR LA PLANILLA REAL DE REGLAS
+
+Agregar a Secrets:
+
+rules_file_id = "10kmGyYwpE4f-ujUgAigwDrQ7uS5DQHs_jQYxcFDNDQc"
+
+Bloque esperado:
+
+[drive]
+stock_file_id = "1D4gde-bbWlPw910hxaVQidpfIULShhS8"
+images_index_file_id = "1fqSlwCqGvyB2W9W0b-3zZrvxp-KjHI4i"
+rules_file_id = "10kmGyYwpE4f-ujUgAigwDrQ7uS5DQHs_jQYxcFDNDQc"
+
+Requisitos:
+- leer la Google Sheet real
+- exportarla como XLSX si no hay cuenta de servicio
+- mantener data/reglas_combos.xlsx como fallback
+- mostrar cuántas reglas se cargaron, desde qué fuente y si se usó fallback
+- no tocar engine/
+
+Archivos probables:
+- app.py
+- services/catalog.py
+- .streamlit/secrets.toml.example
+- README.md
+
+B. ACTUALIZACIÓN INCREMENTAL CADA 15 MINUTOS
+
+Cada 15 minutos, Streamlit debe consultar solamente metadatos/versiones de CSV, planilla de reglas y JSON de imágenes.
+
+Si no cambió:
+- no descargar
+- no procesar
+- no invalidar caché
+
+Si cambió:
+- descargar únicamente esa fuente
+- procesarla
+- reconstruir el catálogo reducido
+
+C. CATÁLOGO REDUCIDO
+
+El CSV tiene más de 8.464 SKU, pero el motor usa aproximadamente 100 a 150 productos permitidos.
+La app debe:
+1. leer el CSV completo solo cuando cambia
+2. leer reglas solo cuando cambian
+3. cruzar por SKU
+4. conservar en caché únicamente los SKU habilitados
+5. asociar sku, name, price, stock, category, pack_units e image_url
+
+Todos los usuarios deben compartir esa caché.
+No guardar el catálogo completo en st.session_state.
+
+D. OPTIMIZACIÓN PARA CONCURRENCIA
+
+- no descargar Drive por interacción
+- no recalcular el motor al cambiar una cantidad
+- no regenerar PDF en cada rerun
+- no guardar imágenes ni PDF en session_state
+- no duplicar DataFrames por usuario
+- no guardar el CSV completo por sesión
+- historial limitado a 10 o 15 combos
+- guardar en historial solo datos mínimos
+- imágenes siempre por URL
+- mostrar solo productos visibles
+- extras paginados o por categoría
+- usar st.fragment cuando convenga
+- evitar st.rerun innecesarios
+- PDF solo bajo demanda
+- cache_data con ttl y max_entries
+- cache_resource para servicios de Drive
+
+E. REDISEÑO COMPLETO DE INTERFAZ
+
+Diseño:
+- fondo #0b0e14
+- tarjetas #161a24
+- tarjetas secundarias #1d2230
+- texto principal blanco
+- texto secundario #a9b0c0
+- fucsia Cotyland #ef1452
+- cian #18d9f5
+- degradado linear-gradient(90deg, #ef1452 0%, #7b4dff 52%, #18d9f5 100%)
+- tipografía Plus Jakarta Sans con fallback de sistema
+- botones píldora
+- tarjetas compactas
+- imágenes cuadradas
+- buen contraste
+- evitar selectores CSS frágiles
+
+Responsive:
+- layout wide
+- máximo 1180 px en escritorio
+- una columna en celular
+- contenido + panel sticky a la derecha en PC
+- barra fija inferior en celular
+
+F. FLUJO EN 3 PASOS
+
+Paso 1: cantidad de invitados, perfil, generar combo, editar cantidades, sabores, productos sugeridos, subtotal, descuento, total y continuar.
+
+Paso 2: extras, bolsitas, velas, bengalas, juguetitos y otros opcionales; agregar/quitar; continuar sin extras; total visible en vivo.
+
+Paso 3: presupuesto final, resumen completo, combo, extras, bolsitas, descuentos, ahorro, total final, total transferencia, volver y editar, finalizar pedido y descargar PDF.
+
+El PDF debe aparecer exclusivamente en el Paso 3.
+
+G. PRECIO SIEMPRE VISIBLE
+
+En celular:
+- barra fija inferior
+- total grande
+- subtotal y descuento secundarios
+- botón principal
+- reservar espacio para no tapar controles
+
+En PC:
+- panel sticky a la derecha
+- combo, extras, bolsitas, descuento, ahorro y total
+
+El total debe actualizarse al instante al sumar, restar, agregar/quitar extras o bolsitas y volver a pasos anteriores.
+No duplicar lógica de cálculo.
+
+H. FUNCIONES PENDIENTES
+
+- Extras
+- Bolsitas
+- Finalizar pedido
+- PDF del pedido final
+- Descargar todos los presupuestos vistos
+- Elegir un presupuesto como pedido final
+- Reutilizar combo anterior
+- Historial
+- Favoritos
+- Botón Like / Dislike
+
+I. TEXTO INSTITUCIONAL
+
+Debajo del logo:
+Diseñado y desarrollado por Cotyland para nuestros clientes 😉
+
+J. ANALÍTICA ANÓNIMA
+
+Registrar:
+- app_open
+- combo_generated
+- profile_selected
+- extras_opened
+- extra_added
+- extra_removed
+- combo_favorited
+- pdf_downloaded
+- order_finished
+- feedback_like
+- feedback_dislike
+- drive_error
+- fallback_used
+
+Datos permitidos:
+- session_id anónimo
+- fecha y hora
+- perfil
+- cantidad de invitados
+- cantidad de productos
+- total o rango
+- duración de generación
+- paso
+- dispositivo aproximado
+- categoría explorada
+- SKU agregado como extra
+- cantidad de combos por sesión
+
+No registrar nombre, email, teléfono, IP ni datos personales.
+La analítica debe ser no bloqueante, con timeout corto, desacoplada de engine/, sin duplicados por rerun y sin registrar cada toque de + o -.
+
+K. GOOGLE SHEETS PARA EVENTOS
+
+Crear Apps Script con doPost que reciba eventos pequeños.
+Usar LockService y appendRow.
+Crear hoja EVENTOS_GOLOSINERO.
+
+L. RESUMEN DIARIO
+
+Crear trigger diario que envíe por email:
+- visitas
+- sesiones únicas
+- combos generados
+- promedio por sesión
+- perfiles
+- promedio de invitados
+- horarios pico
+- paso Extras
+- extras agregados
+- PDF descargados
+- pedidos finalizados
+- likes
+- dislikes
+- categorías exploradas
+- errores Drive
+- uso de fallback
+- tiempo medio de generación
+
+M. FUTURA API DE TIENDANUBE
+
+La fuente CSV es provisoria.
+Diseñar una capa de catálogo desacoplada para que en el futuro pueda reemplazarse por Tiendanube sin tocar engine/, interfaz, modelos ni lógica de generación.
+
+============================================================
+4. ORDEN RECOMENDADO PARA CODEX
+============================================================
+
+1. Abrir el repositorio real.
+2. Confirmar ruta, repo, rama, últimos commits y cambios sin subir.
+3. Revisar estructura completa.
+4. No modificar nada todavía.
+5. Mostrar archivos que va a tocar.
+6. Conectar rules_file_id.
+7. Implementar catálogo reducido y caché incremental.
+8. Probar carga de SKU nuevos desde Google Sheets.
+9. Confirmar engine/ intacto.
+10. Hacer commit y push.
+11. Verificar redeploy de Streamlit.
+12. Recién después hacer rediseño de interfaz.
+13. Luego agregar extras, pedido final, PDF final e historial.
+14. Finalmente agregar analítica y resumen diario.
+
+============================================================
+5. MENSAJE LISTO PARA PEGAR EN CODEX
+============================================================
+
+Proyecto: cotilloncotyland/golosinero-streamlit
+
+Antes de modificar:
+- Revisá el repositorio completo.
+- Confirmá ruta local, rama y últimos commits.
+- Informá cambios sin subir.
+- Mostrame los archivos que pensás tocar.
+- No modifiques engine/.
+
+Estado:
+- CSV de Drive funcionando.
+- Parser validado con más de 8.464 SKU.
+- Imágenes funcionando desde images_index_file_id.
+- JSON oficial: 1fqSlwCqGvyB2W9W0b-3zZrvxp-KjHI4i
+- Planilla oficial: 10kmGyYwpE4f-ujUgAigwDrQ7uS5DQHs_jQYxcFDNDQc
+- app.py todavía carga data/reglas_combos.xlsx.
+- Los cambios preparados anteriormente NO fueron subidos a GitHub.
+
+Prioridad 1:
+Conectar rules_file_id manteniendo fallback local.
+
+Prioridad 2:
+Implementar actualización incremental cada 15 minutos y catálogo reducido compartido.
+
+Reglas estrictas:
+- No tocar engine/.
+- No cambiar generación, cobertura, sabores ni variedad.
+- No tocar el parser del CSV.
+- Nombre, precio y stock salen del CSV.
+- La planilla aporta SKU, categoría y DIVISIBLE.
+- No guardar DataFrames completos en session_state.
+- No duplicar catálogos por usuario.
+- No leer Drive por interacción.
+- No generar PDF automáticamente.
+
+Después:
+- ejecutar pruebas
+- mostrar diff
+- confirmar engine/ intacto
+- hacer commit y push
+- verificar redeploy

@@ -5,7 +5,7 @@ import io, json, uuid
 import streamlit as st
 import pandas as pd
 
-from services.catalog import parse_csv_bytes, load_rules_xlsx, public_drive_download, drive_service, api_metadata, api_download, load_json_bytes
+from services.catalog import parse_csv_bytes, load_rules_xlsx, public_drive_download, public_google_sheet_export, drive_service, api_metadata, api_download, api_export_xlsx, load_json_bytes
 from services.freshness import freshness_status
 from engine.generator import generate_combo, combo_total
 from engine.models import ComboItem
@@ -21,6 +21,13 @@ def get_drive_service():
         if info and info.get("client_email"):
             return drive_service(info)
     except Exception: pass
+    return None
+
+@st.cache_resource
+def get_rules_drive_service():
+    info=st.secrets.get("google_service_account",{})
+    if info and info.get("client_email"):
+        return drive_service(info)
     return None
 
 @st.cache_data(ttl=60,show_spinner=False)
@@ -47,9 +54,18 @@ def load_images(index_id):
     data=json.loads((ROOT/'data/imagenes_index_fallback.json').read_text(encoding='utf-8'))
     return data.get("images",{}),data.get("logoUrl","")
 
-@st.cache_data(show_spinner=False)
-def load_rules():
-    return load_rules_xlsx(ROOT/'data/reglas_combos.xlsx')
+@st.cache_data(ttl=900,max_entries=4,show_spinner="Actualizando reglas...")
+def load_rules(file_id):
+    try:
+        service=get_rules_drive_service()
+        content=api_export_xlsx(service,file_id) if service else public_google_sheet_export(file_id)
+        rules=load_rules_xlsx(io.BytesIO(content))
+        if rules.empty:
+            raise ValueError("La planilla de Google Sheets no contiene reglas activas")
+        return rules,"Google Drive",None
+    except Exception as exc:
+        rules=load_rules_xlsx(ROOT/'data/reglas_combos.xlsx')
+        return rules,"fallback local",str(exc)
 
 
 def init_state():
@@ -61,6 +77,7 @@ init_state()
 # Data source
 stock_id=st.secrets.get("drive",{}).get("stock_file_id","1D4gde-bbWlPw910hxaVQidpfIULShhS8")
 index_id=st.secrets.get("drive",{}).get("images_index_file_id","")
+rules_id=st.secrets.get("drive",{}).get("rules_file_id","10kmGyYwpE4f-ujUgAigwDrQ7uS5DQHs_jQYxcFDNDQc")
 meta=get_stock_metadata(stock_id)
 version=meta.get("modifiedTime") or meta.get("md5Checksum") or str(meta.get("size","public"))
 try:
@@ -68,11 +85,16 @@ try:
 except Exception as exc:
     st.warning(f"No pude leer Drive, uso la copia de prueba incluida. Detalle: {exc}")
     products=parse_csv_bytes((ROOT/'data/GOLOSINERO_fallback.csv').read_bytes())
-rules=load_rules(); images,logo_url=load_images(index_id)
+rules,rules_source,rules_error=load_rules(rules_id); images,logo_url=load_images(index_id)
 
 fresh_cfg=dict(st.secrets.get("freshness",{})) or {"timezone":"America/Argentina/Buenos_Aires","max_age_minutes_open":120,"max_age_hours_closed":72,"open_weekdays":[0,1,2,3,4,5],"open_ranges":["09:00-13:00","14:30-19:30"]}
 fresh=freshness_status(meta.get("modifiedTime"),fresh_cfg)
 discount=int(st.secrets.get("app",{}).get("discount_percent",5))
+
+if rules_error:
+    st.warning(f"Reglas: {rules_source} - {len(rules):,} activas. No se pudo leer Google Drive: {rules_error}".replace(",","."))
+else:
+    st.success(f"Reglas: {rules_source} - {len(rules):,} activas".replace(",","."))
 
 # Header
 c1,c2=st.columns([1,4])

@@ -33,5 +33,10 @@ Sin secretos intenta leer el CSV público por ID y usa los archivos fallback si 
 ## Drive privado
 Crear una cuenta de servicio, compartir el CSV y el archivo `imagenes_index.json` con el correo `client_email` como lector, y pegar la credencial en Streamlit Secrets.
 
+## Reglas desde Google Sheets
+Configurar la planilla mediante `drive.rules_file_id`. La app la exporta como XLSX, mantiene el resultado en caché durante 15 minutos y usa `data/reglas_combos.xlsx` como fallback si Drive falla. La interfaz muestra siempre la fuente y la cantidad de reglas activas.
+
+Si se usa una cuenta de servicio, compartir también la Google Sheet con el correo `client_email` como lector.
+
 ## Importante
 Esta versión es un MVP para comparar comportamiento y velocidad. Antes de abrirla al público hay que validar nuevamente cobertura, surtido y cantidades con una batería de pruebas contra la versión Apps Script.

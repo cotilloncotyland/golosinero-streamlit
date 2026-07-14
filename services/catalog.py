@@ -87,6 +87,12 @@ def public_drive_download(file_id: str) -> bytes:
     return r.content
 
 
+def public_google_sheet_export(file_id: str) -> bytes:
+    r=requests.get(f"https://docs.google.com/spreadsheets/d/{file_id}/export?format=xlsx", timeout=35)
+    r.raise_for_status()
+    return r.content
+
+
 def public_drive_metadata(file_id: str) -> dict:
     # Sin credenciales Google no expone modifiedTime de forma fiable. Se usa encabezado HTTP si existe.
     r=requests.get(f"https://drive.google.com/uc?export=download&id={file_id}", stream=True, timeout=20)
@@ -109,6 +115,19 @@ def api_metadata(service, file_id: str) -> dict:
 def api_download(service, file_id: str) -> bytes:
     from googleapiclient.http import MediaIoBaseDownload
     request=service.files().get_media(fileId=file_id)
+    fh=io.BytesIO(); dl=MediaIoBaseDownload(fh,request)
+    done=False
+    while not done:
+        _,done=dl.next_chunk()
+    return fh.getvalue()
+
+
+def api_export_xlsx(service, file_id: str) -> bytes:
+    from googleapiclient.http import MediaIoBaseDownload
+    request=service.files().export_media(
+        fileId=file_id,
+        mimeType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
     fh=io.BytesIO(); dl=MediaIoBaseDownload(fh,request)
     done=False
     while not done:
