@@ -17,13 +17,23 @@ from services.catalog import (
     public_google_sheet_export, public_sheet_metadata, recover_source,
 )
 from services.freshness import freshness_status
-from services.order_service import (
-    active_selection, add_flavor_candidates, append_history, build_combo_config,
-    calculate_order, navigate, normalize_selection, rebalance_flavor,
-    reconstruct_combo_lines, reconstruct_lines, remove_product, restore_product,
-    set_free_quantity, set_quantity,
-)
+from services import order_service
 from services.pdf_service import build_comparison_pdf, build_pdf, money
+
+active_selection=order_service.active_selection
+add_flavor_candidates=order_service.add_flavor_candidates
+append_history=order_service.append_history
+build_combo_config=order_service.build_combo_config
+calculate_order=order_service.calculate_order
+navigate=order_service.navigate
+normalize_selection=order_service.normalize_selection
+rebalance_flavor=order_service.rebalance_flavor
+reconstruct_combo_lines=order_service.reconstruct_combo_lines
+reconstruct_lines=order_service.reconstruct_lines
+remove_product=order_service.remove_product
+restore_product=order_service.restore_product
+set_free_quantity=order_service.set_free_quantity
+set_quantity=order_service.set_quantity
 
 ROOT=Path(__file__).parent
 st.set_page_config(page_title="Armá tu combo | Cotyland",page_icon="🎉",layout="wide")
