@@ -1,53 +1,101 @@
+from __future__ import annotations
+
+from datetime import datetime
 from io import BytesIO
-from reportlab.lib.pagesizes import A4
+from zoneinfo import ZoneInfo
+
+from PIL import Image as PILImage
 from reportlab.lib import colors
+from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import mm
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image
-from PIL import Image as PILImage
-import requests
+from reportlab.platypus import Image, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
 
-def money(v): return "$"+f"{v:,.0f}".replace(",",".")
+def money(value):
+    return "$" + f"{value:,.0f}".replace(",", ".")
 
-def fetch_image(url):
-    if not url: return None
+
+def _company_lines(company):
+    labels = (("WhatsApp","whatsapp_display"),("Web","website"),("Instagram","instagram"),("Dirección","address"))
+    return [f"<b>{label}:</b> {company.get(key)}" for label,key in labels if company.get(key)]
+
+
+def _logo(logo_path, max_width=52*mm, max_height=18*mm):
+    if not logo_path:
+        return None
     try:
-        r=requests.get(url.replace("sz=w220","sz=w600"),timeout=10); r.raise_for_status()
-        bio=BytesIO(r.content); PILImage.open(bio).verify(); bio.seek(0); return bio
-    except Exception: return None
+        width, height = PILImage.open(logo_path).size
+        scale = min(max_width/width, max_height/height)
+        return Image(str(logo_path), width=width*scale, height=height*scale)
+    except Exception:
+        return None
 
 
-def _section(story, title, lines, styles):
+def _table(title, lines, styles):
     if not lines:
-        return
-    story.append(Paragraph(title, styles["Heading2"]))
-    data=[["Cant.","Producto","SKU","Unitario","Subtotal"]]
+        return [Paragraph(title, styles["Section"]), Paragraph("Sin productos seleccionados", styles["Small"]), Spacer(1, 5)]
+    data=[["Cant.","Producto","Precio unit.","Subtotal"]]
     for line in lines:
-        data.append([
-            str(line["quantity"]), Paragraph(line["name"],styles["BodyText"]), line["sku"],
-            money(line["unit_price"]), money(line["subtotal"]),
-        ])
-    table=Table(data,colWidths=[14*mm,85*mm,28*mm,28*mm,28*mm],repeatRows=1)
-    table.setStyle(TableStyle([("BACKGROUND",(0,0),(-1,0),colors.HexColor("#6d28d9")),("TEXTCOLOR",(0,0),(-1,0),colors.white),("FONTNAME",(0,0),(-1,0),"Helvetica-Bold"),("GRID",(0,0),(-1,-1),.25,colors.HexColor("#d8d2e5")),("VALIGN",(0,0),(-1,-1),"MIDDLE"),("ROWBACKGROUNDS",(0,1),(-1,-1),[colors.white,colors.HexColor("#faf7ff")]),("FONTSIZE",(0,0),(-1,-1),8)]))
-    story.extend([table,Spacer(1,8)])
+        data.append([str(line["quantity"]),Paragraph(line["name"],styles["BodyText"]),money(line["unit_price"]),money(line["subtotal"])])
+    table=Table(data,colWidths=[15*mm,104*mm,30*mm,30*mm],repeatRows=1,splitByRow=1)
+    table.setStyle(TableStyle([
+        ("BACKGROUND",(0,0),(-1,0),colors.HexColor("#6d28d9")),("TEXTCOLOR",(0,0),(-1,0),colors.white),
+        ("FONTNAME",(0,0),(-1,0),"Helvetica-Bold"),("GRID",(0,0),(-1,-1),.25,colors.HexColor("#d8d2e5")),
+        ("VALIGN",(0,0),(-1,-1),"MIDDLE"),("ROWBACKGROUNDS",(0,1),(-1,-1),[colors.white,colors.HexColor("#faf7ff")]),
+        ("FONTSIZE",(0,0),(-1,-1),8),("TOPPADDING",(0,1),(-1,-1),5),("BOTTOMPADDING",(0,1),(-1,-1),5),
+    ]))
+    return [Paragraph(title,styles["Section"]),table,Spacer(1,7)]
 
 
-def build_pdf(combo, bags, extras, totals, kids, profile, logo_path=None):
-    out=BytesIO(); doc=SimpleDocTemplate(out,pagesize=A4,rightMargin=14*mm,leftMargin=14*mm,topMargin=12*mm,bottomMargin=14*mm)
-    styles=getSampleStyleSheet(); story=[]
-    if logo_path:
-        try: story.append(Image(str(logo_path),width=42*mm,height=18*mm)); story.append(Spacer(1,4))
-        except Exception: pass
-    story.append(Paragraph("Combo de golosinas Cotyland",styles["Title"]))
-    story.append(Paragraph(f"{kids} invitados · Perfil {profile.capitalize()}",styles["Heading2"]))
-    _section(story,"Combo de golosinas",combo,styles)
-    _section(story,"Bolsitas",bags,styles)
-    _section(story,"Extras",extras,styles)
-    story.append(Paragraph(f"Subtotal combo: {money(totals['combo_subtotal'])}",styles["BodyText"]))
-    story.append(Paragraph(f"Descuento combo ({totals['discount_percent']}%): -{money(totals['discount_amount'])}",styles["BodyText"]))
-    story.append(Paragraph(f"Subtotal bolsas: {money(totals['bags_subtotal'])}",styles["BodyText"]))
-    story.append(Paragraph(f"Subtotal extras: {money(totals['extras_subtotal'])}",styles["BodyText"]))
-    story.append(Paragraph(f"<b>Total final: {money(totals['total'])}</b>",styles["Heading2"]))
-    story.append(Paragraph("Presupuesto sujeto a disponibilidad y actualización de stock. Para confirmar el pedido, descargá este PDF y envialo por WhatsApp a Cotyland.",styles["BodyText"]))
-    doc.build(story); out.seek(0); return out.getvalue()
+def _styles():
+    styles=getSampleStyleSheet()
+    styles.add(ParagraphStyle(name="Section",parent=styles["Heading2"],textColor=colors.HexColor("#6d28d9"),spaceBefore=5,spaceAfter=4))
+    styles.add(ParagraphStyle(name="Small",parent=styles["BodyText"],fontSize=8,leading=10,textColor=colors.HexColor("#555555")))
+    styles.add(ParagraphStyle(name="Total",parent=styles["Heading1"],fontSize=18,textColor=colors.HexColor("#ef1452"),alignment=2))
+    return styles
+
+
+def _footer(canvas, doc):
+    canvas.saveState(); canvas.setFont("Helvetica",7); canvas.setFillColor(colors.HexColor("#777777"))
+    canvas.drawCentredString(A4[0]/2,7*mm,"Diseñado y desarrollado por Cotyland para nuestros clientes ;)")
+    canvas.restoreState()
+
+
+def build_pdf(combo, bags, extras, totals, kids, profile, company=None, removed_product="", logo_path=None, now=None):
+    company=company or {}; now=now or datetime.now(ZoneInfo("America/Argentina/Buenos_Aires"))
+    out=BytesIO(); doc=SimpleDocTemplate(out,pagesize=A4,rightMargin=14*mm,leftMargin=14*mm,topMargin=10*mm,bottomMargin=14*mm)
+    styles=_styles(); story=[]; logo=_logo(logo_path)
+    if logo: story.extend([logo,Spacer(1,4)])
+    story.append(Paragraph("Presupuesto de Combo",styles["Title"]))
+    story.append(Paragraph(f"{now.strftime('%d/%m/%Y %H:%M')} · {kids} invitados · Perfil {profile.capitalize()}",styles["BodyText"]))
+    story.append(Spacer(1,7))
+    story.extend(_table("Golosinas del combo",combo,styles)); story.extend(_table("Bolsitas",bags,styles)); story.extend(_table("Extras",extras,styles))
+    summary=[["Subtotal del combo",money(totals["combo_subtotal"])],[f"Descuento ({totals['discount_percent']}%)",f"-{money(totals['discount_amount'])}"],["Ahorro",money(totals["savings"])],["Subtotal Bolsitas",money(totals["bags_subtotal"])],["Subtotal Extras",money(totals["extras_subtotal"])]]
+    if removed_product: summary.insert(1,["Producto quitado",removed_product])
+    summary_table=Table(summary,colWidths=[115*mm,55*mm],hAlign="RIGHT")
+    summary_table.setStyle(TableStyle([("ALIGN",(1,0),(1,-1),"RIGHT"),("LINEABOVE",(0,0),(-1,0),.5,colors.HexColor("#999999")),("FONTNAME",(0,-1),(-1,-1),"Helvetica-Bold"),("FONTSIZE",(0,0),(-1,-1),9)]))
+    story.extend([summary_table,Spacer(1,4),Paragraph(f"TOTAL FINAL {money(totals['total'])}",styles["Total"]),Spacer(1,8)])
+    company_lines=_company_lines(company)
+    if company_lines:
+        story.extend([Paragraph("Información comercial",styles["Section"]),Paragraph("<br/>".join(company_lines),styles["BodyText"]),Spacer(1,4),Paragraph("Envíanos tu pedido por WhatsApp para confirmar disponibilidad.",styles["BodyText"])])
+    doc.build(story,onFirstPage=_footer,onLaterPages=_footer); out.seek(0); return out.getvalue()
+
+
+def build_comparison_pdf(entries, company=None, logo_path=None, now=None):
+    company=company or {}; now=now or datetime.now(ZoneInfo("America/Argentina/Buenos_Aires"))
+    out=BytesIO(); doc=SimpleDocTemplate(out,pagesize=A4,rightMargin=14*mm,leftMargin=14*mm,topMargin=10*mm,bottomMargin=14*mm)
+    styles=_styles(); story=[]; logo=_logo(logo_path)
+    if logo: story.extend([logo,Spacer(1,4)])
+    story.extend([Paragraph("Comparación de combos",styles["Title"]),Paragraph(now.strftime("%d/%m/%Y %H:%M"),styles["Small"]),Spacer(1,6)])
+    for entry in entries:
+        story.append(Paragraph(f"Combo #{entry['number']} · {entry['profile'].capitalize()} · {entry['kids']} invitados",styles["Section"]))
+        data=[["Cant.","Producto","Subtotal"]]+[[str(x["quantity"]),Paragraph(x["name"],styles["Small"]),money(x["subtotal"])] for x in entry["lines"]]
+        table=Table(data,colWidths=[16*mm,125*mm,35*mm],repeatRows=1,splitByRow=1)
+        table.setStyle(TableStyle([("BACKGROUND",(0,0),(-1,0),colors.HexColor("#6d28d9")),("TEXTCOLOR",(0,0),(-1,0),colors.white),("GRID",(0,0),(-1,-1),.25,colors.HexColor("#dddddd")),("FONTSIZE",(0,0),(-1,-1),8),("VALIGN",(0,0),(-1,-1),"MIDDLE")]))
+        story.append(table)
+        if entry.get("removed_product"): story.append(Paragraph(f"Producto quitado: {entry['removed_product']}",styles["Small"]))
+        totals=entry["totals"]
+        story.append(Paragraph(f"Subtotal {money(totals['combo_subtotal'])} · Descuento {money(totals['discount_amount'])} · Ahorro {money(totals['savings'])} · <b>Total {money(totals['combo_total'])}</b>",styles["BodyText"]))
+        story.append(Spacer(1,8))
+    doc.build(story,onFirstPage=_footer,onLaterPages=_footer); out.seek(0); return out.getvalue()
