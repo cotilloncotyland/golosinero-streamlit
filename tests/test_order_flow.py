@@ -134,9 +134,14 @@ class OrderFlowTests(unittest.TestCase):
     def test_app_keeps_generation_and_pdfs_under_explicit_controls(self):
         source=Path("app.py").read_text(encoding="utf-8")
         self.assertEqual(source.count("generate_combo("),1)
-        self.assertIn('if st.button("🎲 Generar una opción"',source)
-        self.assertIn('if st.button("Preparar PDF")',source)
-        self.assertIn('if st.button("Descargar favoritos en PDF"',source)
+        self.assertIn('if st.button("GENERAR COMBO"',source)
+        self.assertIn('if st.button("Preparar PDF individual"',source)
+        self.assertIn('if st.button("Preparar PDF comparativo"',source)
+        self.assertIn('if st.session_state.step==1:',source)
+        self.assertIn('render_snapshot_detail(favorite,catalog,discount)',source)
+        self.assertIn('render_snapshot_detail(entry,catalog,discount)',source)
+        self.assertNotIn('"Ver este combo"',source)
+        self.assertNotIn('"Quitar de favoritos"',source)
         self.assertNotIn("session_state.pdf",source)
         self.assertNotIn("session_state.catalog",source)
 
