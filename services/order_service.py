@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from datetime import datetime
+from decimal import Decimal, ROUND_HALF_UP
 from typing import Iterable
+from zoneinfo import ZoneInfo
 
 
 def build_combo_config(items: Iterable) -> dict:
@@ -137,14 +140,73 @@ def reconstruct_combo_lines(config: dict, catalog) -> list[dict]:
     return lines
 
 
-def calculate_order(combo: list[dict], bags: list[dict], extras: list[dict], discount: int) -> dict:
-    combo_subtotal=sum(float(x["subtotal"]) for x in combo); bags_subtotal=sum(float(x["subtotal"]) for x in bags); extras_subtotal=sum(float(x["subtotal"]) for x in extras)
-    savings=combo_subtotal*max(0,int(discount))/100
-    return {"combo_subtotal":combo_subtotal,"discount_percent":int(discount),"discount_amount":savings,"savings":savings,"combo_total":combo_subtotal-savings,"bags_subtotal":bags_subtotal,"extras_subtotal":extras_subtotal,"total":combo_subtotal-savings+bags_subtotal+extras_subtotal}
+def round_money(value) -> int:
+    return int(Decimal(str(value)).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+
+
+def normalize_kids(value,minimum=1,maximum=150) -> int:
+    return max(int(minimum),min(int(maximum),int(value)))
+
+
+def calculate_order(combo: list[dict], bags: list[dict], extras: list[dict], discount: int, payment_discount: int = 10) -> dict:
+    subtotal_combo_original=round_money(sum(Decimal(str(x["subtotal"])) for x in combo))
+    subtotal_bolsitas=round_money(sum(Decimal(str(x["subtotal"])) for x in bags))
+    subtotal_extras=round_money(sum(Decimal(str(x["subtotal"])) for x in extras))
+    discount_percent=max(0,int(discount)); payment_discount_percent=max(0,int(payment_discount))
+    descuento_combo=round_money(Decimal(subtotal_combo_original)*Decimal(discount_percent)/Decimal(100))
+    subtotal_general=subtotal_combo_original+subtotal_bolsitas+subtotal_extras
+    total_pedido=subtotal_general-descuento_combo
+    descuento_medio_pago=round_money(Decimal(total_pedido)*Decimal(payment_discount_percent)/Decimal(100))
+    total_efectivo_transferencia=total_pedido-descuento_medio_pago
+    return {
+        "subtotal_combo_original":subtotal_combo_original,"descuento_combo":descuento_combo,
+        "subtotal_bolsitas":subtotal_bolsitas,"subtotal_extras":subtotal_extras,
+        "subtotal_general":subtotal_general,"total_pedido":total_pedido,
+        "descuento_medio_pago":descuento_medio_pago,"total_efectivo_transferencia":total_efectivo_transferencia,
+        "discount_percent":discount_percent,"payment_discount_percent":payment_discount_percent,
+        # Claves compatibles con la interfaz y PDFs anteriores.
+        "combo_subtotal":subtotal_combo_original,"discount_amount":descuento_combo,"savings":descuento_combo,
+        "combo_total":subtotal_combo_original-descuento_combo,"bags_subtotal":subtotal_bolsitas,
+        "extras_subtotal":subtotal_extras,"total":total_pedido,
+    }
 
 
 def append_history(history: list[dict], entry: dict, limit: int = 10) -> list[dict]:
     return (list(history)+[deepcopy(entry)])[-limit:]
+
+
+def order_snapshot(combo_id,number,kids,profile,config,bags_selection,extras_selection,totals,created_at=None) -> dict:
+    created_at=created_at or datetime.now(ZoneInfo("America/Argentina/Buenos_Aires")).isoformat(timespec="minutes")
+    return {"id":str(combo_id),"number":int(number),"created_at":created_at,"kids":int(kids),"profile":str(profile),
+            "config":deepcopy(config),"bags_selection":dict(bags_selection),"extras_selection":dict(extras_selection),"totals":dict(totals)}
+
+
+def append_favorite(favorites: dict,entry: dict,limit: int = 10) -> dict:
+    result={str(key):deepcopy(value) for key,value in favorites.items() if str(key)!=str(entry["id"])}
+    result[str(entry["id"])]=deepcopy(entry)
+    while len(result)>limit: result.pop(next(iter(result)))
+    return result
+
+
+def restore_snapshot(entry: dict) -> dict:
+    return {"combo_id":entry["id"],"combo_number":int(entry["number"]),"kids":int(entry["kids"]),"profile":entry["profile"],
+            "combo_config":deepcopy(entry["config"]),"bags_selection":dict(entry.get("bags_selection",{})),"extras_selection":dict(entry.get("extras_selection",{}))}
+
+
+def format_money(value) -> str:
+    return "$"+f"{round_money(value):,}".replace(",",".")
+
+
+def build_whatsapp_message(combo,bags,extras,totals,kids,profile) -> str:
+    sections=[f"Hola Cotyland, preparé este pedido para {int(kids)} invitados (perfil {str(profile).capitalize()}):"]
+    for title,lines in (("Combo",combo),("Bolsitas",bags),("Extras",extras)):
+        sections.append(f"\n{title}:")
+        sections.extend(f"- {int(line['quantity'])} x {line['name']} ({format_money(line['subtotal'])})" for line in lines) if lines else sections.append("- Sin productos")
+    sections.extend([f"\nTotal del pedido: {format_money(totals['total_pedido'])}",
+                     f"Ahorrás {format_money(totals['descuento_combo'])} comprando el combo",
+                     f"Efectivo o transferencia: {format_money(totals['total_efectivo_transferencia'])}",
+                     "10% de descuento adicional pagando en efectivo o por transferencia"])
+    return "\n".join(sections)
 
 
 def navigate(current: int, target: int, has_combo: bool = True) -> int:

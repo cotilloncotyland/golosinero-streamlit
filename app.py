@@ -2,10 +2,12 @@ from __future__ import annotations
 
 from copy import deepcopy
 from datetime import datetime
+from email.utils import parsedate_to_datetime
 from html import escape
 from pathlib import Path
 from urllib.parse import quote, urlparse
 import io, json, logging, time, uuid
+from zoneinfo import ZoneInfo
 
 import streamlit as st
 
@@ -27,6 +29,7 @@ build_combo_config=order_service.build_combo_config
 calculate_order=order_service.calculate_order
 navigate=order_service.navigate
 normalize_selection=order_service.normalize_selection
+normalize_kids=order_service.normalize_kids
 rebalance_flavor=order_service.rebalance_flavor
 reconstruct_combo_lines=order_service.reconstruct_combo_lines
 reconstruct_lines=order_service.reconstruct_lines
@@ -34,6 +37,10 @@ remove_product=order_service.remove_product
 restore_product=order_service.restore_product
 set_free_quantity=order_service.set_free_quantity
 set_quantity=order_service.set_quantity
+append_favorite=order_service.append_favorite
+build_whatsapp_message=order_service.build_whatsapp_message
+order_snapshot=order_service.order_snapshot
+restore_snapshot=order_service.restore_snapshot
 
 ROOT=Path(__file__).parent
 st.set_page_config(page_title="Armá tu combo | Cotyland",page_icon="🎉",layout="wide")
@@ -90,7 +97,7 @@ def resolve_source(key,file_id,source_type,loader,fallback_loader):
         value,version,source=recover_source(store,key,fallback_loader); return value,version,source,str(exc),{}
 
 def init_state():
-    defaults={"step":1,"kids":20,"profile":"variado","combo_id":None,"combo_config":{"items":{},"removed_product_key":None},"bags_selection":{},"extras_selection":{},"history":[],"favorites":{},"combo_number":0,"pending_remove_key":None}
+    defaults={"step":1,"kids":20,"profile":"variado","combo_id":None,"combo_config":{"items":{},"removed_product_key":None},"bags_selection":{},"extras_selection":{},"history":[],"favorites":{},"combo_number":0,"pending_remove_key":None,"pending_snapshot":None}
     for key,value in defaults.items():
         if key not in st.session_state: st.session_state[key]=value
     if not isinstance(st.session_state.favorites,dict): st.session_state.favorites={}
@@ -111,10 +118,10 @@ def image_markup(url,name,final=False):
     return f'<a class="thumb-link" href="{safe}" target="_blank" rel="noopener" aria-label="Ampliar {label}"><img class="{css}" src="{safe}" alt="{label}" loading="lazy" onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'flex\'"><span class="thumb-placeholder">Imagen no disponible</span></a>'
 
 def render_brand(updated_at):
-    logo,text=st.columns([1,5],vertical_alignment="center")
-    with logo: st.image(ROOT/"assets/cotyland_logo.png",width=150)
-    with text: st.markdown('<div class="brand-copy"><strong>Armá tu pedido a tu manera</strong>Diseñado y desarrollado por Cotyland para nuestros clientes 😉</div>',unsafe_allow_html=True)
-    st.markdown(f'<div class="update-line">Última actualización: {escape(updated_at)}</div>',unsafe_allow_html=True)
+    st.markdown('<div class="brand-shell">',unsafe_allow_html=True)
+    st.image(ROOT/"assets/cotyland_logo.png",width=220)
+    st.markdown('<div class="brand-copy"><strong>Armá tus fiestas con un par de clics</strong><span>Diseñado y desarrollado por Cotyland para nuestros clientes 😉</span></div>',unsafe_allow_html=True)
+    st.markdown(f'<div class="update-line">Lista de precios actualizada: {escape(updated_at)}</div></div>',unsafe_allow_html=True)
 
 def render_progress(step):
     labels=("Combo","Bolsitas","Extras","Final")
@@ -131,15 +138,19 @@ def modified_label(metadata):
     raw=str(metadata.get("modifiedTime") or metadata.get("Last-Modified") or "").strip()
     if not raw: return "no informada"
     try:
-        return datetime.fromisoformat(raw.replace("Z","+00:00")).astimezone().strftime("%d/%m/%Y %H:%M")
-    except ValueError:
-        return raw
+        stamp=datetime.fromisoformat(raw.replace("Z","+00:00")) if "T" in raw else parsedate_to_datetime(raw)
+        return stamp.astimezone(ZoneInfo("America/Argentina/Buenos_Aires")).strftime("%d/%m/%Y %H:%M")
+    except (TypeError,ValueError): return raw
+
+def snapshot_date(entry):
+    try: return datetime.fromisoformat(entry.get("created_at","")).strftime("%d/%m/%Y %H:%M")
+    except (TypeError,ValueError): return "Sin fecha"
 
 def has_combo(): return bool(active_selection(st.session_state.combo_config))
 
 def clear_combo_widgets():
     for key in list(st.session_state):
-        if key.startswith(("flavor_","free_")): del st.session_state[key]
+        if key.startswith(("flavor_","free_")) or key in {"kids_widget","profile_widget"}: del st.session_state[key]
 
 def logical_description(logical_key,catalog,config):
     if not logical_key: return ""
@@ -176,6 +187,12 @@ def adjust_free_quantity(sku,delta,stock):
 def adjust_optional_quantity(selection_key,sku,delta,stock):
     current=int(st.session_state[selection_key].get(sku,0)); st.session_state[selection_key]=set_quantity(st.session_state[selection_key],sku,current+delta,stock)
 
+def sync_kids():
+    st.session_state.kids=normalize_kids(st.session_state.kids_widget)
+
+def sync_profile():
+    st.session_state.profile=st.session_state.profile_widget
+
 def compact_quantity(value,minus_key,plus_key,minus_action,plus_action,disabled=False):
     minus,amount,plus=st.columns([1,1.25,1])
     minus.button("−",key=minus_key,on_click=minus_action,disabled=disabled,use_container_width=True)
@@ -208,16 +225,18 @@ def render_combo_editor(catalog):
             st.markdown(f"**{escape(logical_description(logical_key,catalog,config))}** " + ('<span class="removed-label">QUITADO</span>' if removed else ""),unsafe_allow_html=True)
             if mode=="compensated":
                 st.caption(f"Elegí sabores manteniendo {items[0]['required_total']} unidades en total.")
+                group_subtotal=0
                 for item in items:
                     row=catalog[catalog["sku"]==item["sku"]]
                     if row.empty or int(row.iloc[0]["stock"])<=0: continue
-                    product=row.iloc[0]; qty=int(item["quantity"]); media,details,controls=st.columns([1.05,3.1,2],vertical_alignment="center")
+                    product=row.iloc[0]; qty=int(item["quantity"]); group_subtotal+=qty*float(product["price"]); media,details,controls=st.columns([1.05,3.1,2],vertical_alignment="center")
                     with media: st.markdown(image_markup(product["image_url"],product["name"]),unsafe_allow_html=True)
                     with details:
                         st.markdown(f"**{escape(str(product['name']))}**")
                         st.markdown(f'<div class="product-price">{money(product["price"])} c/u</div><div class="product-subtotal">{money(qty*float(product["price"]))}</div>',unsafe_allow_html=True)
                     with controls:
                         compact_quantity(qty,f"flavor_minus_{item['sku']}",f"flavor_plus_{item['sku']}",lambda sku=item["sku"],stock=int(product["stock"]):adjust_flavor_quantity(sku,-1,stock),lambda sku=item["sku"],stock=int(product["stock"]):adjust_flavor_quantity(sku,1,stock),removed)
+                st.markdown(f'<div class="group-subtotal"><span>Subtotal del grupo</span><strong>{money(group_subtotal)}</strong></div>',unsafe_allow_html=True)
             else:
                 row=catalog[catalog["sku"]==items[0]["sku"]]
                 if not row.empty:
@@ -250,12 +269,14 @@ def render_optional(category,title,catalog,selection_key):
 
 def render_price_summary(totals):
     st.markdown(f'''<div class="desktop-breakdown"><div class="summary-title">Resumen del pedido</div>
-    <div class="summary-line"><span>Subtotal del combo</span><strong>{money(totals['combo_subtotal'])}</strong></div>
-    <div class="summary-line saving"><span>Descuento</span><strong>-{money(totals['discount_amount'])}</strong></div>
-    <div class="summary-line"><span>Bolsitas</span><strong>{money(totals['bags_subtotal'])}</strong></div>
-    <div class="summary-line"><span>Extras</span><strong>{money(totals['extras_subtotal'])}</strong></div></div>
-    <div class="summary-total"><span>TOTAL</span><strong>{money(totals['total'])}</strong></div>
-    <div class="summary-saving">Ahorrás {money(totals['savings'])}</div>''',unsafe_allow_html=True)
+    <div class="summary-line"><span>Combo generado</span><strong>{money(totals['subtotal_combo_original'])}</strong></div>
+    <div class="summary-line"><span>Bolsitas</span><strong>{money(totals['subtotal_bolsitas'])}</strong></div>
+    <div class="summary-line"><span>Extras</span><strong>{money(totals['subtotal_extras'])}</strong></div>
+    <div class="summary-line summary-divider"><span>Subtotal general</span><strong>{money(totals['subtotal_general'])}</strong></div>
+    <div class="summary-line saving"><span>Ahorro comprando el combo</span><strong>-{money(totals['descuento_combo'])}</strong></div></div>
+    <div class="summary-total"><span>TOTAL DEL PEDIDO</span><strong>{money(totals['total_pedido'])}</strong></div>
+    <div class="summary-saving">Ahorrás {money(totals['descuento_combo'])} comprando el combo</div>
+    <div class="cash-total"><span>EFECTIVO O TRANSFERENCIA</span><strong>{money(totals['total_efectivo_transferencia'])}</strong><small>10% de descuento adicional</small></div>''',unsafe_allow_html=True)
 
 def render_final_lines(title,lines):
     st.subheader(title)
@@ -264,9 +285,22 @@ def render_final_lines(title,lines):
         for line in lines:
             st.markdown(f'<div class="final-row">{image_markup(line.get("image_url"),line["name"],True)}<div class="final-qty">{int(line["quantity"])}×</div><div class="final-name">{escape(str(line["name"]))}</div><div class="final-price">{money(line["subtotal"])}</div></div>',unsafe_allow_html=True)
 
-def update_history_current():
+def current_snapshot(totals):
+    return order_snapshot(st.session_state.combo_id,st.session_state.combo_number,st.session_state.kids,st.session_state.profile,st.session_state.combo_config,st.session_state.bags_selection,st.session_state.extras_selection,totals)
+
+def activate_snapshot(entry,target=1):
+    restored=restore_snapshot(entry); clear_combo_widgets()
+    for key,value in restored.items(): st.session_state[key]=value
+    st.session_state.step=navigate(1,target,True); st.session_state.pending_snapshot=None
+
+def update_history_current(totals):
     for entry in st.session_state.history:
-        if entry["id"]==st.session_state.combo_id: entry["config"]=deepcopy(st.session_state.combo_config)
+        if entry["id"]==st.session_state.combo_id:
+            created_at=entry.get("created_at"); entry.update(current_snapshot(totals)); entry["created_at"]=created_at or entry["created_at"]
+    if st.session_state.combo_id in st.session_state.favorites:
+        created_at=st.session_state.favorites[st.session_state.combo_id].get("created_at")
+        st.session_state.favorites[st.session_state.combo_id]=current_snapshot(totals)
+        if created_at: st.session_state.favorites[st.session_state.combo_id]["created_at"]=created_at
 
 init_state()
 drive_cfg=st.secrets.get("drive",{}); company=dict(st.secrets.get("company",{}))
@@ -287,16 +321,18 @@ for label,error in (("stock",stock_error),("reglas",rules_error),("imágenes",im
 if stock_error and stock_source=="fallback local": st.error("No pudimos actualizar el catálogo. Estamos mostrando la última versión disponible.")
 
 render_brand(modified_label(stock_metadata)); render_progress(st.session_state.step)
-main,summary=st.columns([3.35,1.25],gap="large")
+main,summary=st.columns([3.05,1.45],gap="large")
 
 with main:
     if st.session_state.step==1:
         render_heading(1,"Generá tu combo","Elegí la cantidad de invitados y el perfil. Después podés personalizarlo.")
         setup_left,setup_right=st.columns([1,1.6],vertical_alignment="bottom")
-        with setup_left: kids=st.number_input("Cantidad de invitados",10,150,int(st.session_state.kids),1)
+        if "kids_widget" not in st.session_state: st.session_state.kids_widget=int(st.session_state.kids)
+        with setup_left: st.number_input("Cantidad de invitados",min_value=1,max_value=150,step=1,key="kids_widget",on_change=sync_kids)
         profiles=["economico","variado","premium"]
-        with setup_right: profile=st.radio("Tipo de combo",profiles,index=profiles.index(st.session_state.profile),horizontal=True)
-        st.session_state.kids,st.session_state.profile=int(kids),profile
+        if "profile_widget" not in st.session_state: st.session_state.profile_widget=st.session_state.profile
+        with setup_right: st.radio("Tipo de combo",profiles,horizontal=True,key="profile_widget",on_change=sync_profile)
+        kids=normalize_kids(st.session_state.kids); profile=st.session_state.profile
         if st.button("🎲 Generar una opción",type="primary",disabled=not fresh["ok"],use_container_width=True):
             clear_combo_widgets(); combo=generate_combo(allowed_products,allowed_rules,allowed_images,int(kids),profile); config=build_combo_config(combo)
             for group in {x["flavor_group"] for x in config["items"].values() if x["mode"]=="compensated"}:
@@ -304,13 +340,15 @@ with main:
                 candidates=[{"sku":row.sku} for row in catalog.itertuples() if row.category==template["category"] and int(row.pack_units)==template["pack_units"] and int(row.stock)>0 and brand_line(row.name,row.category)==group]
                 config=add_flavor_candidates(config,group,candidates)
             st.session_state.combo_config=config; st.session_state.combo_id=str(uuid.uuid4())[:8]; st.session_state.combo_number+=1
-            entry={"id":st.session_state.combo_id,"number":st.session_state.combo_number,"kids":int(kids),"profile":profile,"config":deepcopy(config)}; st.session_state.history=append_history(st.session_state.history,entry); st.rerun()
+            initial_lines=reconstruct_combo_lines(config,catalog); initial_totals=calculate_order(initial_lines,bags_lines,extras_lines,discount)
+            entry=order_snapshot(st.session_state.combo_id,st.session_state.combo_number,kids,profile,config,st.session_state.bags_selection,st.session_state.extras_selection,initial_totals)
+            st.session_state.history=append_history(st.session_state.history,entry); st.rerun()
         if has_combo():
             st.subheader("Tu combo está listo"); render_combo_editor(catalog)
             favorite=st.session_state.combo_id in st.session_state.favorites
-            if st.button("⭐ Guardado" if favorite else "☆ Guardar favorito"):
+            if st.button("♥ Guardado en favoritos" if favorite else "♡ Guardar en favoritos"):
                 if favorite: st.session_state.favorites.pop(st.session_state.combo_id,None)
-                else: st.session_state.favorites[st.session_state.combo_id]={"id":st.session_state.combo_id,"number":st.session_state.combo_number,"kids":st.session_state.kids,"profile":st.session_state.profile,"config":deepcopy(st.session_state.combo_config)}
+                else: st.session_state.favorites=append_favorite(st.session_state.favorites,current_snapshot(totals))
                 st.rerun()
         else: st.info("Primero generá o seleccioná un combo.")
 
@@ -331,8 +369,9 @@ with main:
         if st.button("Preparar PDF"):
             pdf=build_pdf(combo_lines,bags_lines,extras_lines,totals,st.session_state.kids,st.session_state.profile,company,removed,ROOT/"assets/cotyland_logo.png")
             st.download_button("Descargar PDF final",pdf,file_name=f"pedido_cotyland_{st.session_state.combo_id}.pdf",mime="application/pdf",use_container_width=True); del pdf
-        back_combo,back_extras=st.columns(2)
+        back_combo,back_bags,back_extras=st.columns(3)
         if back_combo.button("Editar Combo",use_container_width=True): st.session_state.step=1; st.rerun()
+        if back_bags.button("Editar Bolsitas",use_container_width=True): st.session_state.step=2; st.rerun()
         if back_extras.button("Editar Extras",use_container_width=True): st.session_state.step=3; st.rerun()
 
 with summary:
@@ -345,37 +384,54 @@ with summary:
         if st.button("Continuar al pedido →",type="primary",use_container_width=True): st.session_state.step=navigate(3,4,has_combo()); st.rerun()
     else:
         number=company.get("whatsapp_number","5491125244522")
-        message=f"Hola Cotyland, preparé un pedido para {st.session_state.kids} invitados, perfil {st.session_state.profile}, total {money(totals['total'])}. Voy a adjuntar el PDF."
+        message=build_whatsapp_message(combo_lines,bags_lines,extras_lines,totals,st.session_state.kids,st.session_state.profile)
         st.link_button("◉ Enviar por WhatsApp",f"https://wa.me/{number}?text={quote(message)}",use_container_width=True)
 
-update_history_current()
+update_history_current(totals)
 if st.session_state.favorites:
     st.divider(); st.subheader("Favoritos")
     for favorite in reversed(list(st.session_state.favorites.values())):
-        with st.expander(f"⭐ Combo #{favorite['number']} · {favorite['profile']} · {favorite['kids']} invitados"):
-            cols=st.columns(4)
-            for col,target,label in zip(cols,(1,2,3,4),("Editar combo","Ir a Bolsitas","Ir a Extras","Pedido final")):
-                if col.button(label,key=f"fav_{favorite['id']}_{target}"):
-                    clear_combo_widgets(); st.session_state.combo_config=deepcopy(favorite["config"]); st.session_state.combo_id=favorite["id"]; st.session_state.kids=favorite["kids"]; st.session_state.profile=favorite["profile"]; st.session_state.step=target; st.rerun()
+        total=favorite.get("totals",{}).get("total_pedido",0)
+        with st.expander(f"♥ Combo #{favorite['number']} · {snapshot_date(favorite)} · {favorite['kids']} invitados · {money(total)}"):
+            st.caption(f"Perfil {favorite['profile'].capitalize()} · Efectivo/transferencia {money(favorite.get('totals',{}).get('total_efectivo_transferencia',0))}")
+            open_col,remove_col=st.columns(2)
+            if open_col.button("Ver este combo",key=f"fav_open_{favorite['id']}",use_container_width=True):
+                if has_combo() and st.session_state.combo_id!=favorite["id"]: st.session_state.pending_snapshot=("favorite",favorite["id"])
+                else: activate_snapshot(favorite)
+                st.rerun()
+            if remove_col.button("Quitar de favoritos",key=f"fav_remove_{favorite['id']}",use_container_width=True): st.session_state.favorites.pop(favorite["id"],None); st.rerun()
+    if st.button("Descargar favoritos en PDF",use_container_width=True):
+        favorite_entries=list(st.session_state.favorites.values())[-10:]; comparison_payload=[]
+        for entry in favorite_entries:
+            combo_f=reconstruct_combo_lines(entry["config"],catalog); bags_f=reconstruct_lines(entry.get("bags_selection",{}),catalog,"bolsas"); extras_f=reconstruct_lines(entry.get("extras_selection",{}),catalog,"extras"); totals_f=calculate_order(combo_f,bags_f,extras_f,discount)
+            comparison_payload.append({**entry,"combo":combo_f,"bags":bags_f,"extras":extras_f,"totals":totals_f,"removed_product":logical_description(entry["config"].get("removed_product_key"),catalog,entry["config"])})
+        comparison=build_comparison_pdf(comparison_payload,company,ROOT/"assets/cotyland_logo.png")
+        st.download_button("Guardar PDF de favoritos",comparison,file_name="favoritos_cotyland.pdf",mime="application/pdf",use_container_width=True); del comparison
+else:
+    st.button("Descargar favoritos en PDF",disabled=True,use_container_width=True)
 
 if st.session_state.history:
-    st.divider(); st.subheader("Combos vistos")
+    st.divider(); st.subheader("Últimos combos vistos")
     for entry in reversed(st.session_state.history):
-        if st.button(f"Usar Combo #{entry['number']} · {entry['profile']} · {entry['kids']} invitados",key=f"history_{entry['id']}"):
-            clear_combo_widgets(); st.session_state.combo_config=deepcopy(entry["config"]); st.session_state.combo_id=entry["id"]; st.session_state.kids=entry["kids"]; st.session_state.profile=entry["profile"]; st.session_state.step=1; st.rerun()
-    if st.button("Descargar comparación"):
-        entries=[]
-        comparison_sources=list(st.session_state.history)
-        known_ids={entry["id"] for entry in comparison_sources}
-        comparison_sources.extend(entry for entry in st.session_state.favorites.values() if entry["id"] not in known_ids)
-        for entry in comparison_sources:
-            lines=reconstruct_combo_lines(entry["config"],catalog); entry_totals=calculate_order(lines,[],[],discount); removed=logical_description(entry["config"].get("removed_product_key"),catalog,entry["config"])
-            entries.append({**entry,"lines":lines,"totals":entry_totals,"removed_product":removed})
-        comparison=build_comparison_pdf(entries,company,ROOT/"assets/cotyland_logo.png")
-        st.download_button("Guardar comparación",comparison,file_name="comparacion_combos_cotyland.pdf",mime="application/pdf"); del comparison
+        total=entry.get("totals",{}).get("total_pedido",0)
+        left,right=st.columns([4,1.4],vertical_alignment="center")
+        left.markdown(f"**Combo #{entry['number']}** · {snapshot_date(entry)} · {entry['kids']} invitados · {entry['profile'].capitalize()} · **{money(total)}**")
+        if right.button("Seleccionar combo",key=f"history_{entry['id']}",use_container_width=True):
+            if has_combo() and st.session_state.combo_id!=entry["id"]: st.session_state.pending_snapshot=("history",entry["id"])
+            else: activate_snapshot(entry)
+            st.rerun()
+
+if st.session_state.pending_snapshot:
+    source,snapshot_id=st.session_state.pending_snapshot; collection=st.session_state.favorites.values() if source=="favorite" else st.session_state.history
+    pending=next((entry for entry in collection if entry["id"]==snapshot_id),None)
+    if pending:
+        st.warning("Tenés un combo abierto. ¿Querés reemplazarlo por el seleccionado?")
+        yes,no=st.columns(2)
+        if yes.button("Sí, abrir el seleccionado",type="primary",use_container_width=True): activate_snapshot(pending); st.rerun()
+        if no.button("Conservar el combo actual",use_container_width=True): st.session_state.pending_snapshot=None; st.rerun()
 
 contact=[]
-for label,key in (("WhatsApp","whatsapp_display"),("Web","website"),("Instagram","instagram"),("Dirección","address")):
+for label,key in (("WhatsApp","whatsapp_display"),("Web","website"),("Instagram","instagram"),("Dirección","address"),("Correo","email")):
     if company.get(key): contact.append(f"**{label}:** {company[key]}")
 if contact: st.divider(); st.markdown("  \n".join(contact)); st.caption("Envíanos tu pedido por WhatsApp para confirmar disponibilidad.")
 st.caption("Diseñado y desarrollado por Cotyland para nuestros clientes 😉")
