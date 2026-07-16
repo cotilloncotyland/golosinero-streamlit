@@ -11,7 +11,7 @@ from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import mm
-from reportlab.platypus import CondPageBreak, Image, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+from reportlab.platypus import CondPageBreak, Image, KeepTogether, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
 LOGGER=logging.getLogger(__name__)
 
@@ -152,8 +152,9 @@ def build_pdf(combo, bags, extras, totals, kids, profile, company=None, removed_
     styles=_styles(); story=[]; logo=_logo(logo_path)
     story.extend(_document_header("Presupuesto de Combo",f"{now.strftime('%d/%m/%Y %H:%M')} · {kids} invitados · Perfil {profile.capitalize()}",styles,logo))
     story.extend(_table("Golosinas del combo",combo,styles)); story.extend(_table("Bolsitas",bags,styles)); story.extend(_table("Extras",extras,styles))
-    story.extend([Paragraph("Resumen del pedido",styles["Section"]),_summary_card(totals,styles,removed_product)])
-    story.extend(_company_card(company,styles))
+    summary_block=[Paragraph("Resumen del pedido",styles["Section"]),_summary_card(totals,styles,removed_product)]
+    summary_block.extend(_company_card(company,styles))
+    story.append(KeepTogether(summary_block))
     doc.build(story,onFirstPage=_footer,onLaterPages=_footer); out.seek(0); return out.getvalue()
 
 

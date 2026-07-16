@@ -281,8 +281,11 @@ def render_final_lines(title,lines):
     if not lines:
         st.markdown('<div class="final-empty">Sin productos seleccionados</div>',unsafe_allow_html=True)
         return
-    for line in lines:
-        st.markdown(f'<div class="final-row">{image_markup(line.get("image_url"),line["name"],True)}<div class="final-qty">{int(line["quantity"])}×</div><div class="final-name">{escape(str(line["name"]))}</div><div class="final-price">{money(line["subtotal"])}</div></div>',unsafe_allow_html=True)
+    rows="".join(
+        f'<div class="final-row">{image_markup(line.get("image_url"),line["name"],True)}<div class="final-qty">{int(line["quantity"])}×</div><div class="final-name">{escape(str(line["name"]))}</div><div class="final-price">{money(line["subtotal"])}</div></div>'
+        for line in lines
+    )
+    st.markdown(f'<div class="final-lines">{rows}</div>',unsafe_allow_html=True)
 
 def render_snapshot_lines(lines):
     for line in lines:
