@@ -158,17 +158,46 @@ def safe_kids_value(state, default=20) -> int:
         except (TypeError,ValueError): return normalize_kids(default)
 
 
-def format_drive_modified_time(value,timezone_name="America/Argentina/Buenos_Aires") -> str:
-    """Formatea modifiedTime UTC o local sin aplicar dos veces el huso horario."""
-    raw=str(value or "").strip()
-    if not raw: return "no informada"
-    try:
-        stamp=datetime.fromisoformat(raw.replace("Z","+00:00")) if "T" in raw else parsedate_to_datetime(raw)
-        target=ZoneInfo(timezone_name)
-        stamp=stamp.replace(tzinfo=target) if stamp.tzinfo is None else stamp.astimezone(target)
-        return stamp.strftime("%d/%m/%Y %H:%M")
-    except (TypeError,ValueError,ZoneInfoNotFoundError): return raw
+def format_drive_modified_time(
+    value,
+    timezone_name="America/Argentina/Buenos_Aires",
+) -> str:
+    """Formatea una fecha UTC o HTTP en horario local argentino."""
 
+    raw = str(value or "").strip()
+
+    if not raw:
+        return "no informada"
+
+    try:
+        # Formato HTTP de Google Drive:
+        # Thu, 16 Jul 2026 12:55:34 GMT
+        if "," in raw or "GMT" in raw.upper():
+            stamp = parsedate_to_datetime(raw)
+
+        # Formatos ISO:
+        # 2026-07-15T16:05:00Z
+        # 2026-07-15T13:05:00-03:00
+        else:
+            stamp = datetime.fromisoformat(
+                raw.replace("Z", "+00:00")
+            )
+
+        target = ZoneInfo(timezone_name)
+
+        if stamp.tzinfo is None:
+            stamp = stamp.replace(
+                tzinfo=ZoneInfo("UTC")
+            )
+
+        local_time = stamp.astimezone(target)
+
+        return local_time.strftime(
+            "%d/%m/%Y %H:%M hs"
+        )
+
+    except (TypeError, ValueError, OverflowError):
+        return raw
 
 def calculate_order(combo: list[dict], bags: list[dict], extras: list[dict], discount: int, payment_discount: int = 10) -> dict:
     subtotal_combo_original=round_money(sum(Decimal(str(x["subtotal"])) for x in combo))
