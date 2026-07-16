@@ -326,7 +326,17 @@ def update_history_current(totals):
         if created_at: st.session_state.favorites[st.session_state.combo_id]["created_at"]=created_at
 
 init_state()
-drive_cfg=st.secrets.get("drive",{}); company=dict(st.secrets.get("company",{}))
+drive_cfg=st.secrets.get("drive",{})
+company={
+    "name":"Cotyland",
+    "address":"Paraná 6552, Villa Adelina",
+    "whatsapp_number":"5491125244522",
+    "whatsapp_display":"11 2524-4522",
+    "website":"www.cotilloncotyland.ar",
+    "instagram":"@cotilloncotyland",
+    "email":"",
+    **dict(st.secrets.get("company",{})),
+}
 stock_id=drive_cfg.get("stock_file_id","1D4gde-bbWlPw910hxaVQidpfIULShhS8"); rules_id=drive_cfg.get("rules_file_id","10kmGyYwpE4f-ujUgAigwDrQ7uS5DQHs_jQYxcFDNDQc"); images_id=drive_cfg.get("images_index_file_id","1fqSlwCqGvyB2W9W0b-3zZrvxp-KjHI4i")
 products,stock_version,stock_source,stock_error,_=resolve_source("stock",stock_id,"stock",load_stock_version,lambda:parse_csv_bytes((ROOT/"data/GOLOSINERO_fallback.csv").read_bytes()))
 rules,rules_version,rules_source,rules_error,_=resolve_source("rules",rules_id,"rules",load_rules_version,lambda:load_rules_xlsx(ROOT/"data/reglas_combos.xlsx"))
