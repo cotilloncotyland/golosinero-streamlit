@@ -98,7 +98,7 @@ def resolve_source(key,file_id,source_type,loader,fallback_loader):
         value,version,source=recover_source(store,key,fallback_loader); return value,version,source,str(exc),{}
 
 def init_state():
-    defaults={"step":1,"kids":20,"profile":"variado","combo_kids":20,"combo_profile":"variado","combo_id":None,"combo_config":{"items":{},"removed_product_key":None},"bags_selection":{},"extras_selection":{},"history":[],"favorites":{},"combo_number":0,"pending_remove_key":None,"pending_snapshot":None,"generating":False,"sync_setup_widgets":False}
+    defaults={"step":1,"kids":20,"kids_widget":20,"profile":"variado","profile_widget":"VARIADO","combo_kids":20,"combo_profile":"variado","combo_id":None,"combo_config":{"items":{},"removed_product_key":None},"bags_selection":{},"extras_selection":{},"history":[],"favorites":{},"combo_number":0,"pending_remove_key":None,"pending_snapshot":None,"generating":False,"sync_setup_widgets":False}
     for key,value in defaults.items():
         if key not in st.session_state: st.session_state[key]=value
     if not isinstance(st.session_state.favorites,dict): st.session_state.favorites={}
@@ -188,9 +188,6 @@ def adjust_optional_quantity(selection_key,sku,delta,stock):
 
 def sync_kids():
     st.session_state.kids=safe_kids_value(st.session_state)
-
-def adjust_kids(delta):
-    st.session_state.kids=normalize_kids(int(st.session_state.get("kids",20))+int(delta))
 
 def sync_profile():
     labels={"ECONÓMICO":"economico","VARIADO":"variado","PREMIUM":"premium"}
@@ -348,20 +345,19 @@ main,summary=st.columns([3.05,1.45],gap="large")
 with main:
     if st.session_state.step==1:
         render_heading(1,"Generá tu combo","Elegí la cantidad de invitados y el perfil. Después podés personalizarlo.")
-        setup_left,setup_right=st.columns([1,1.55],vertical_alignment="top")
-        with setup_left:
-            st.markdown('<div class="setup-kids-marker">&nbsp;</div>',unsafe_allow_html=True)
-            st.markdown('<div class="setup-label">Cantidad de invitados</div>',unsafe_allow_html=True)
-            st.markdown(f'<div class="kids-value">{int(st.session_state.kids)}</div>',unsafe_allow_html=True)
-            kids_minus,kids_plus=st.columns(2)
-            kids_minus.button("−",key="kids_minus",on_click=adjust_kids,args=(-1,),disabled=int(st.session_state.kids)<=1,use_container_width=True)
-            kids_plus.button("＋",key="kids_plus",on_click=adjust_kids,args=(1,),disabled=int(st.session_state.kids)>=150,use_container_width=True)
         profile_labels={"economico":"ECONÓMICO","variado":"VARIADO","premium":"PREMIUM"}
-        if st.session_state.pop("sync_setup_widgets",False) or "profile_widget" not in st.session_state: st.session_state.profile_widget=profile_labels[st.session_state.profile]
+        if st.session_state.pop("sync_setup_widgets",False):
+            st.session_state.kids_widget=int(st.session_state.kids)
+            st.session_state.profile_widget=profile_labels[st.session_state.profile]
+        setup_left,setup_right=st.columns([1,1.4],vertical_alignment="top")
+        with setup_left:
+            with st.container(border=True):
+                st.number_input("Cantidad de invitados",min_value=1,max_value=150,step=1,key="kids_widget",on_change=sync_kids)
         with setup_right:
-            st.markdown('<div class="profile-selector-marker">&nbsp;</div>',unsafe_allow_html=True)
-            st.segmented_control("Tipo de combo",list(profile_labels.values()),key="profile_widget",selection_mode="single",on_change=sync_profile)
-        kids=normalize_kids(st.session_state.kids); profile=st.session_state.profile
+            with st.container(border=True):
+                st.segmented_control("Tipo de combo",list(profile_labels.values()),key="profile_widget",selection_mode="single",on_change=sync_profile,width="stretch")
+        kids=safe_kids_value(st.session_state); st.session_state.kids=kids
+        profile=st.session_state.profile
         if st.button("GENERAR COMBO",type="primary",disabled=not fresh["ok"] or st.session_state.generating,use_container_width=True):
             st.session_state.generating=True
             try:
