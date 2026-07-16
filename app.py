@@ -121,6 +121,10 @@ def image_markup(url,name,final=False):
     safe=escape(safe,quote=True)
     return f'<a class="thumb-link" href="{safe}" target="_blank" rel="noopener" aria-label="Ampliar {label}"><img class="{css}" src="{safe}" alt="{label}" loading="lazy" onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'flex\'"><span class="thumb-placeholder">Imagen no disponible</span></a>'
 
+def product_identity_markup(url,name,details_html="",name_class="combo-item-name"):
+    label=escape(str(name))
+    return f'<div class="product-identity"><div class="product-media-slot">{image_markup(url,name)}</div><div class="product-copy"><div class="{name_class}">{label}</div>{details_html}</div></div>'
+
 def render_brand(updated_at):
     st.markdown('<div class="brand-shell">',unsafe_allow_html=True)
     logo_left,logo_center,logo_right=st.columns([1,1,1])
@@ -223,26 +227,26 @@ def render_combo_editor(catalog):
                     if row.empty or int(row.iloc[0]["stock"])<=0: continue
                     product=row.iloc[0]; qty=int(item["quantity"]); group_subtotal+=qty*float(product["price"])
                     with st.container(key=f"combo_variant_{st.session_state.combo_id}_{group_index}_{variant_index}"):
-                        media,details,controls=st.columns([1.05,3.1,2],vertical_alignment="center")
-                        with media: st.markdown(image_markup(product["image_url"],product["name"]),unsafe_allow_html=True)
-                        with details:
-                            st.markdown(f'<div class="combo-item-name">{escape(str(product["name"]))}</div>',unsafe_allow_html=True)
-                            st.markdown(f'<div class="product-price">{money(product["price"])} c/u</div>',unsafe_allow_html=True)
-                        with controls:
-                            compact_quantity(qty,f"flavor_minus_{st.session_state.combo_id}_{item['sku']}",f"flavor_plus_{st.session_state.combo_id}_{item['sku']}",lambda sku=item["sku"],stock=int(product["stock"]):adjust_flavor_quantity(sku,-1,stock),lambda sku=item["sku"],stock=int(product["stock"]):adjust_flavor_quantity(sku,1,stock),removed)
-                            st.markdown(f'<div class="product-subtotal"><span>Subtotal</span>{money(qty*float(product["price"]))}</div>',unsafe_allow_html=True)
+                        with st.container(key=f"product_row_{st.session_state.combo_id}_{group_index}_{variant_index}"):
+                            identity,controls=st.columns([4.15,2],vertical_alignment="center")
+                            with identity:
+                                st.markdown(product_identity_markup(product["image_url"],product["name"],f'<div class="product-price">{money(product["price"])} c/u</div>'),unsafe_allow_html=True)
+                            with controls:
+                                compact_quantity(qty,f"flavor_minus_{st.session_state.combo_id}_{item['sku']}",f"flavor_plus_{st.session_state.combo_id}_{item['sku']}",lambda sku=item["sku"],stock=int(product["stock"]):adjust_flavor_quantity(sku,-1,stock),lambda sku=item["sku"],stock=int(product["stock"]):adjust_flavor_quantity(sku,1,stock),removed)
+                                st.markdown(f'<div class="product-subtotal"><span>Subtotal</span>{money(qty*float(product["price"]))}</div>',unsafe_allow_html=True)
                 st.markdown(f'<div class="group-subtotal"><span>Subtotal del grupo</span><strong>{money(group_subtotal)}</strong></div>',unsafe_allow_html=True)
             else:
                 row=catalog[catalog["sku"]==items[0]["sku"]]
                 if not row.empty:
-                    item=items[0]; product=row.iloc[0]; qty=int(item["quantity"]); media,details,controls=st.columns([1.05,3.1,2],vertical_alignment="center")
-                    with media: st.markdown(image_markup(product["image_url"],product["name"]),unsafe_allow_html=True)
-                    with details:
-                        st.markdown(f'<div class="product-price">{money(product["price"])} c/u</div><div class="product-meta">Cantidad {qty}</div>',unsafe_allow_html=True)
-                    with controls:
-                        if mode=="free": compact_quantity(qty,f"free_minus_{st.session_state.combo_id}_{item['sku']}",f"free_plus_{st.session_state.combo_id}_{item['sku']}",lambda sku=item["sku"],stock=int(product["stock"]):adjust_free_quantity(sku,-1,stock),lambda sku=item["sku"],stock=int(product["stock"]):adjust_free_quantity(sku,1,stock),removed)
-                        else: st.markdown(f'<div class="qty-value">{qty}</div><div class="product-meta" style="text-align:center">Cantidad fija</div>',unsafe_allow_html=True)
-                        st.markdown(f'<div class="product-subtotal"><span>Subtotal</span>{money(qty*float(product["price"]))}</div>',unsafe_allow_html=True)
+                    item=items[0]; product=row.iloc[0]; qty=int(item["quantity"])
+                    with st.container(key=f"product_row_{st.session_state.combo_id}_{group_index}_single"):
+                        identity,controls=st.columns([4.15,2],vertical_alignment="center")
+                        with identity:
+                            st.markdown(product_identity_markup(product["image_url"],product["name"],f'<div class="product-price">{money(product["price"])} c/u</div><div class="product-meta">Cantidad {qty}</div>',"product-copy-name"),unsafe_allow_html=True)
+                        with controls:
+                            if mode=="free": compact_quantity(qty,f"free_minus_{st.session_state.combo_id}_{item['sku']}",f"free_plus_{st.session_state.combo_id}_{item['sku']}",lambda sku=item["sku"],stock=int(product["stock"]):adjust_free_quantity(sku,-1,stock),lambda sku=item["sku"],stock=int(product["stock"]):adjust_free_quantity(sku,1,stock),removed)
+                            else: st.markdown(f'<div class="qty-value">{qty}</div><div class="product-meta" style="text-align:center">Cantidad fija</div>',unsafe_allow_html=True)
+                            st.markdown(f'<div class="product-subtotal"><span>Subtotal</span>{money(qty*float(product["price"]))}</div>',unsafe_allow_html=True)
             render_remove_control(logical_key)
     if st.session_state.get("flavor_error"): st.error(st.session_state.flavor_error)
 
@@ -256,11 +260,7 @@ def render_optional(category,title,catalog,selection_key):
             index=row_start+offset; qty=int(selection.get(row.sku,0))
             with columns[offset]:
                 with st.container(border=True,key=f"optional_card_{category}_{index}",height="stretch"):
-                    media,details=st.columns([1,2.25],vertical_alignment="center")
-                    with media: st.markdown(image_markup(row.image_url,row.name),unsafe_allow_html=True)
-                    with details:
-                        st.markdown(f'<div class="optional-name">{escape(str(row.name))}</div>',unsafe_allow_html=True)
-                        st.markdown(f'<div class="product-price">{money(row.price)} c/u</div><div class="stock-label">Stock disponible: {int(row.stock)}</div>',unsafe_allow_html=True)
+                    st.markdown(product_identity_markup(row.image_url,row.name,f'<div class="product-price">{money(row.price)} c/u</div><div class="stock-label">Stock disponible: {int(row.stock)}</div>',"optional-name"),unsafe_allow_html=True)
                     st.markdown(f'<div class="optional-subtotal"><span>Subtotal</span><strong>{money(qty*row.price)}</strong></div>',unsafe_allow_html=True)
                     compact_quantity(qty,f"{selection_key}_minus_{row.sku}",f"{selection_key}_plus_{row.sku}",lambda sku=row.sku,stock=int(row.stock):adjust_optional_quantity(selection_key,sku,-1,stock),lambda sku=row.sku,stock=int(row.stock):adjust_optional_quantity(selection_key,sku,1,stock))
     st.session_state[selection_key]=selection
