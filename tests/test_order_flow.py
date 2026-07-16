@@ -9,7 +9,7 @@ from services.order_service import (
     active_selection, add_flavor_candidates, append_favorite, append_history, build_combo_config,
     build_whatsapp_message, calculate_order, format_drive_modified_time, navigate, normalize_kids, order_snapshot,
     rebalance_flavor, reconstruct_combo_lines, reconstruct_lines, remove_product,
-    restore_product, restore_snapshot, round_money, safe_kids_value, set_free_quantity,
+    restore_product, restore_snapshot, round_money, safe_kids_value, set_free_quantity, set_quantity,
 )
 
 
@@ -58,6 +58,14 @@ class OrderFlowTests(unittest.TestCase):
         other=remove_product(restored,"C1")
         self.assertEqual(other["removed_product_key"],"C1")
 
+    def test_group_and_individual_products_keep_separate_cards(self):
+        grouped={}
+        for item in self.config["items"].values():
+            grouped.setdefault(item["logical_key"],[]).append(item["sku"])
+        self.assertEqual(set(grouped["jugos:BAGGIO JUNIOR"]),{"J1","J2","J3"})
+        self.assertEqual(grouped["C1"],["C1"])
+        self.assertEqual(grouped["R1"],["R1"])
+
     def test_free_quantity_keeps_base_and_caps_at_stock(self):
         increased=set_free_quantity(self.config,"C1",9,10)
         self.assertEqual(increased["items"]["C1"]["quantity"],9)
@@ -69,6 +77,14 @@ class OrderFlowTests(unittest.TestCase):
     def test_required_quantity_is_not_free(self):
         unchanged=set_free_quantity(self.config,"R1",0,5)
         self.assertEqual(unchanged["items"]["R1"]["quantity"],5)
+
+    def test_bag_quantity_respects_stock_and_updates_subtotal(self):
+        selection=set_quantity({},"B1",1,2)
+        selection=set_quantity(selection,"B1",99,2)
+        self.assertEqual(selection,{"B1":2})
+        bags=reconstruct_lines(selection,self.catalog,"bolsas")
+        self.assertEqual(bags[0]["subtotal"],40)
+        self.assertEqual(set_quantity(selection,"B1",0,2),{})
 
     def test_totals_apply_discount_only_to_active_combo(self):
         config=remove_product(self.config,"C1")
@@ -141,6 +157,7 @@ class OrderFlowTests(unittest.TestCase):
     def test_drive_timestamp_converts_utc_once(self):
         self.assertEqual(format_drive_modified_time("2026-07-15T16:05:00Z"),"15/07/2026 13:05")
         self.assertEqual(format_drive_modified_time("2026-07-15T13:05:00-03:00"),"15/07/2026 13:05")
+        self.assertEqual(format_drive_modified_time("2026-07-15T16:07:31Z"),"15/07/2026 13:07")
 
     def test_whatsapp_uses_the_same_totals(self):
         combo=reconstruct_combo_lines(self.config,self.catalog); bags=reconstruct_lines({"B1":1},self.catalog,"bolsas"); extras=reconstruct_lines({"E1":1},self.catalog,"extras")
@@ -162,6 +179,9 @@ class OrderFlowTests(unittest.TestCase):
         self.assertIn('st.number_input("Cantidad de invitados"',source)
         self.assertIn('"kids_widget":20',source)
         self.assertNotIn("setup-kids-marker",source)
+        self.assertIn('key=f"combo_card_',source)
+        self.assertIn('key=f"combo_variant_',source)
+        self.assertIn('key=f"optional_card_',source)
         self.assertNotIn('"Ver este combo"',source)
         self.assertNotIn('"Quitar de favoritos"',source)
         self.assertNotIn("session_state.pdf",source)
