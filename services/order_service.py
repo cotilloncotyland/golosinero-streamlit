@@ -149,12 +149,12 @@ def normalize_kids(value,minimum=1,maximum=150) -> int:
     return max(int(minimum),min(int(maximum),int(value)))
 
 
-def safe_kids_value(state,default=20) -> int:
-    """Obtiene invitados sin depender de que el widget ya esté renderizado."""
-    value=state.get("kids_widget",state.get("kids",default))
+def safe_kids_value(state, default=20) -> int:
+    """Obtiene invitados aunque el widget todavía no esté disponible."""
+    value = state.get("kids_widget", state.get("kids", default))
     try: return normalize_kids(value)
     except (TypeError,ValueError):
-        try: return normalize_kids(state.get("kids",default))
+        try: return normalize_kids(state.get("kids", default))
         except (TypeError,ValueError): return normalize_kids(default)
 
 

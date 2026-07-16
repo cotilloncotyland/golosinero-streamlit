@@ -19,6 +19,7 @@ from services.catalog import (
 )
 from services.freshness import freshness_status
 from services import order_service
+from services.order_service import safe_kids_value
 from services.pdf_service import build_comparison_pdf, build_pdf, money
 
 active_selection=order_service.active_selection
@@ -40,7 +41,6 @@ append_favorite=order_service.append_favorite
 build_whatsapp_message=order_service.build_whatsapp_message
 order_snapshot=order_service.order_snapshot
 restore_snapshot=order_service.restore_snapshot
-safe_kids_value=order_service.safe_kids_value
 format_drive_modified_time=order_service.format_drive_modified_time
 
 ROOT=Path(__file__).parent
