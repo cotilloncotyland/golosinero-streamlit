@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from copy import deepcopy
 from datetime import datetime
+from email.utils import parsedate_to_datetime
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Iterable
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
 def build_combo_config(items: Iterable) -> dict:
@@ -146,6 +147,27 @@ def round_money(value) -> int:
 
 def normalize_kids(value,minimum=1,maximum=150) -> int:
     return max(int(minimum),min(int(maximum),int(value)))
+
+
+def safe_kids_value(state,default=20) -> int:
+    """Obtiene invitados sin depender de que el widget ya esté renderizado."""
+    value=state.get("kids_widget",state.get("kids",default))
+    try: return normalize_kids(value)
+    except (TypeError,ValueError):
+        try: return normalize_kids(state.get("kids",default))
+        except (TypeError,ValueError): return normalize_kids(default)
+
+
+def format_drive_modified_time(value,timezone_name="America/Argentina/Buenos_Aires") -> str:
+    """Formatea modifiedTime UTC o local sin aplicar dos veces el huso horario."""
+    raw=str(value or "").strip()
+    if not raw: return "no informada"
+    try:
+        stamp=datetime.fromisoformat(raw.replace("Z","+00:00")) if "T" in raw else parsedate_to_datetime(raw)
+        target=ZoneInfo(timezone_name)
+        stamp=stamp.replace(tzinfo=target) if stamp.tzinfo is None else stamp.astimezone(target)
+        return stamp.strftime("%d/%m/%Y %H:%M")
+    except (TypeError,ValueError,ZoneInfoNotFoundError): return raw
 
 
 def calculate_order(combo: list[dict], bags: list[dict], extras: list[dict], discount: int, payment_discount: int = 10) -> dict:

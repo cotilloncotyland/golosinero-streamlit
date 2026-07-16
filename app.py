@@ -1,8 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from datetime import datetime, timedelta, timezone
-from email.utils import parsedate_to_datetime
+from datetime import datetime
 from html import escape
 from pathlib import Path
 from urllib.parse import quote, urlparse
@@ -41,6 +40,8 @@ append_favorite=order_service.append_favorite
 build_whatsapp_message=order_service.build_whatsapp_message
 order_snapshot=order_service.order_snapshot
 restore_snapshot=order_service.restore_snapshot
+safe_kids_value=order_service.safe_kids_value
+format_drive_modified_time=order_service.format_drive_modified_time
 
 ROOT=Path(__file__).parent
 st.set_page_config(page_title="Armá tu combo | Cotyland",page_icon="🎉",layout="wide")
@@ -97,10 +98,13 @@ def resolve_source(key,file_id,source_type,loader,fallback_loader):
         value,version,source=recover_source(store,key,fallback_loader); return value,version,source,str(exc),{}
 
 def init_state():
-    defaults={"step":1,"kids":20,"profile":"variado","combo_id":None,"combo_config":{"items":{},"removed_product_key":None},"bags_selection":{},"extras_selection":{},"history":[],"favorites":{},"combo_number":0,"pending_remove_key":None,"pending_snapshot":None}
+    defaults={"step":1,"kids":20,"profile":"variado","combo_kids":20,"combo_profile":"variado","combo_id":None,"combo_config":{"items":{},"removed_product_key":None},"bags_selection":{},"extras_selection":{},"history":[],"favorites":{},"combo_number":0,"pending_remove_key":None,"pending_snapshot":None,"generating":False,"sync_setup_widgets":False}
     for key,value in defaults.items():
         if key not in st.session_state: st.session_state[key]=value
     if not isinstance(st.session_state.favorites,dict): st.session_state.favorites={}
+    # Conserva casillas de combos anteriores durante el rerun que reemplaza la tarjeta.
+    for key in list(st.session_state):
+        if key.startswith("remove_toggle_"): st.session_state[key]=bool(st.session_state[key])
 
 def source_status(label,source,count,error):
     message=f"{label}: {source} · {count:,}".replace(",", ".")
@@ -136,12 +140,7 @@ def render_heading(step,title,help_text):
     st.markdown(f'<div class="section-kicker">Paso {step} de 4</div><h1 class="section-title">{escape(title)}</h1><p class="section-help">{escape(help_text)}</p>',unsafe_allow_html=True)
 
 def modified_label(metadata):
-    raw=str(metadata.get("modifiedTime") or metadata.get("Last-Modified") or "").strip()
-    if not raw: return "no informada"
-    try:
-        stamp=datetime.fromisoformat(raw.replace("Z","+00:00")) if "T" in raw else parsedate_to_datetime(raw)
-        return stamp.astimezone(timezone(timedelta(hours=-3))).strftime("%d/%m/%Y %H:%M")
-    except (TypeError,ValueError): return raw
+    return format_drive_modified_time(metadata.get("modifiedTime") or metadata.get("Last-Modified"))
 
 def snapshot_date(entry):
     try: return datetime.fromisoformat(entry.get("created_at","")).strftime("%d/%m/%Y %H:%M")
@@ -150,8 +149,7 @@ def snapshot_date(entry):
 def has_combo(): return bool(active_selection(st.session_state.combo_config))
 
 def clear_combo_widgets():
-    for key in list(st.session_state):
-        if key.startswith(("flavor_","free_")) or key in {"kids_widget","profile_widget"}: del st.session_state[key]
+    st.session_state.sync_setup_widgets=True
 
 def logical_description(logical_key,catalog,config):
     if not logical_key: return ""
@@ -189,7 +187,10 @@ def adjust_optional_quantity(selection_key,sku,delta,stock):
     current=int(st.session_state[selection_key].get(sku,0)); st.session_state[selection_key]=set_quantity(st.session_state[selection_key],sku,current+delta,stock)
 
 def sync_kids():
-    st.session_state.kids=normalize_kids(st.session_state.kids_widget)
+    st.session_state.kids=safe_kids_value(st.session_state)
+
+def adjust_kids(delta):
+    st.session_state.kids=normalize_kids(int(st.session_state.get("kids",20))+int(delta))
 
 def sync_profile():
     labels={"ECONÓMICO":"economico","VARIADO":"variado","PREMIUM":"premium"}
@@ -197,25 +198,16 @@ def sync_profile():
 
 def compact_quantity(value,minus_key,plus_key,minus_action,plus_action,disabled=False):
     minus,amount,plus=st.columns([1,1.25,1])
-    minus.button("−",key=minus_key,on_click=minus_action,disabled=disabled,use_container_width=True)
+    if minus.button("−",key=minus_key,disabled=disabled,use_container_width=True): minus_action(); st.rerun()
     amount.markdown(f'<div class="qty-value">{int(value)}</div>',unsafe_allow_html=True)
-    plus.button("＋",key=plus_key,on_click=plus_action,disabled=disabled,use_container_width=True)
+    if plus.button("＋",key=plus_key,disabled=disabled,use_container_width=True): plus_action(); st.rerun()
 
 def render_remove_control(logical_key):
-    removed=st.session_state.combo_config.get("removed_product_key")
-    if removed==logical_key:
-        if st.button("Restaurar producto",key=f"restore_{logical_key}"):
-            st.session_state.combo_config=restore_product(st.session_state.combo_config); st.rerun()
-        return
-    if st.button("Quitar producto",key=f"remove_{logical_key}",disabled=removed is not None):
-        st.session_state.pending_remove_key=logical_key; st.rerun()
-    if st.session_state.pending_remove_key==logical_key:
-        st.warning("Podés quitar un solo producto del combo. Los demás quedarán obligatorios.")
-        yes,no=st.columns(2)
-        if yes.button("Confirmar",key=f"confirm_{logical_key}"):
-            st.session_state.combo_config=remove_product(st.session_state.combo_config,logical_key); st.session_state.pending_remove_key=None; st.rerun()
-        if no.button("Cancelar",key=f"cancel_{logical_key}"):
-            st.session_state.pending_remove_key=None; st.rerun()
+    removed=st.session_state.combo_config.get("removed_product_key"); key=f"remove_toggle_{st.session_state.combo_id}_{logical_key}"
+    if key not in st.session_state: st.session_state[key]=removed==logical_key
+    checked=st.checkbox("Quitar del combo",key=key,disabled=removed is not None and removed!=logical_key)
+    if checked and removed is None: st.session_state.combo_config=remove_product(st.session_state.combo_config,logical_key); st.rerun()
+    if not checked and removed==logical_key: st.session_state.combo_config=restore_product(st.session_state.combo_config); st.rerun()
 
 def render_combo_editor(catalog):
     config=st.session_state.combo_config; groups={}
@@ -238,7 +230,7 @@ def render_combo_editor(catalog):
                         st.markdown(f"**{escape(str(product['name']))}**")
                         st.markdown(f'<div class="product-price">{money(product["price"])} c/u</div>',unsafe_allow_html=True)
                     with controls:
-                        compact_quantity(qty,f"flavor_minus_{item['sku']}",f"flavor_plus_{item['sku']}",lambda sku=item["sku"],stock=int(product["stock"]):adjust_flavor_quantity(sku,-1,stock),lambda sku=item["sku"],stock=int(product["stock"]):adjust_flavor_quantity(sku,1,stock),removed)
+                        compact_quantity(qty,f"flavor_minus_{st.session_state.combo_id}_{item['sku']}",f"flavor_plus_{st.session_state.combo_id}_{item['sku']}",lambda sku=item["sku"],stock=int(product["stock"]):adjust_flavor_quantity(sku,-1,stock),lambda sku=item["sku"],stock=int(product["stock"]):adjust_flavor_quantity(sku,1,stock),removed)
                         st.markdown(f'<div class="product-subtotal">{money(qty*float(product["price"]))}</div>',unsafe_allow_html=True)
                 st.markdown(f'<div class="group-subtotal"><span>Subtotal del grupo</span><strong>{money(group_subtotal)}</strong></div>',unsafe_allow_html=True)
             else:
@@ -250,7 +242,7 @@ def render_combo_editor(catalog):
                         st.markdown(f"**{escape(str(product['name']))}**")
                         st.markdown(f'<div class="product-price">{money(product["price"])} c/u</div><div class="product-meta">Cantidad {qty}</div>',unsafe_allow_html=True)
                     with controls:
-                        if mode=="free": compact_quantity(qty,f"free_minus_{item['sku']}",f"free_plus_{item['sku']}",lambda sku=item["sku"],stock=int(product["stock"]):adjust_free_quantity(sku,-1,stock),lambda sku=item["sku"],stock=int(product["stock"]):adjust_free_quantity(sku,1,stock),removed)
+                        if mode=="free": compact_quantity(qty,f"free_minus_{st.session_state.combo_id}_{item['sku']}",f"free_plus_{st.session_state.combo_id}_{item['sku']}",lambda sku=item["sku"],stock=int(product["stock"]):adjust_free_quantity(sku,-1,stock),lambda sku=item["sku"],stock=int(product["stock"]):adjust_free_quantity(sku,1,stock),removed)
                         else: st.markdown(f'<div class="qty-value">{qty}</div><div class="product-meta" style="text-align:center">Cantidad fija</div>',unsafe_allow_html=True)
                         st.markdown(f'<div class="product-subtotal">{money(qty*float(product["price"]))}</div>',unsafe_allow_html=True)
             render_remove_control(logical_key)
@@ -314,11 +306,13 @@ def render_snapshot_detail(entry,catalog,discount):
     return combo,bags,extras,snapshot_totals
 
 def current_snapshot(totals):
-    return order_snapshot(st.session_state.combo_id,st.session_state.combo_number,st.session_state.kids,st.session_state.profile,st.session_state.combo_config,st.session_state.bags_selection,st.session_state.extras_selection,totals)
+    return order_snapshot(st.session_state.combo_id,st.session_state.combo_number,st.session_state.combo_kids,st.session_state.combo_profile,st.session_state.combo_config,st.session_state.bags_selection,st.session_state.extras_selection,totals)
 
 def activate_snapshot(entry,target=1):
     restored=restore_snapshot(entry); clear_combo_widgets()
     for key,value in restored.items(): st.session_state[key]=value
+    st.session_state.combo_kids=restored["kids"]
+    st.session_state.combo_profile=restored["profile"]
     st.session_state.step=navigate(1,target,True); st.session_state.pending_snapshot=None
 
 def update_history_current(totals):
@@ -355,26 +349,35 @@ with main:
     if st.session_state.step==1:
         render_heading(1,"Generá tu combo","Elegí la cantidad de invitados y el perfil. Después podés personalizarlo.")
         setup_left,setup_right=st.columns([1,1.55],vertical_alignment="top")
-        if "kids_widget" not in st.session_state: st.session_state.kids_widget=int(st.session_state.kids)
         with setup_left:
             st.markdown('<div class="setup-kids-marker">&nbsp;</div>',unsafe_allow_html=True)
-            st.number_input("Cantidad de invitados",min_value=1,max_value=150,step=1,key="kids_widget",on_change=sync_kids)
+            st.markdown('<div class="setup-label">Cantidad de invitados</div>',unsafe_allow_html=True)
+            st.markdown(f'<div class="kids-value">{int(st.session_state.kids)}</div>',unsafe_allow_html=True)
+            kids_minus,kids_plus=st.columns(2)
+            kids_minus.button("−",key="kids_minus",on_click=adjust_kids,args=(-1,),disabled=int(st.session_state.kids)<=1,use_container_width=True)
+            kids_plus.button("＋",key="kids_plus",on_click=adjust_kids,args=(1,),disabled=int(st.session_state.kids)>=150,use_container_width=True)
         profile_labels={"economico":"ECONÓMICO","variado":"VARIADO","premium":"PREMIUM"}
-        if "profile_widget" not in st.session_state: st.session_state.profile_widget=profile_labels[st.session_state.profile]
+        if st.session_state.pop("sync_setup_widgets",False) or "profile_widget" not in st.session_state: st.session_state.profile_widget=profile_labels[st.session_state.profile]
         with setup_right:
             st.markdown('<div class="profile-selector-marker">&nbsp;</div>',unsafe_allow_html=True)
             st.segmented_control("Tipo de combo",list(profile_labels.values()),key="profile_widget",selection_mode="single",on_change=sync_profile)
         kids=normalize_kids(st.session_state.kids); profile=st.session_state.profile
-        if st.button("GENERAR COMBO",type="primary",disabled=not fresh["ok"],use_container_width=True):
-            clear_combo_widgets(); combo=generate_combo(allowed_products,allowed_rules,allowed_images,int(kids),profile); config=build_combo_config(combo)
-            for group in {x["flavor_group"] for x in config["items"].values() if x["mode"]=="compensated"}:
-                template=next(x for x in config["items"].values() if x.get("flavor_group")==group)
-                candidates=[{"sku":row.sku} for row in catalog.itertuples() if row.category==template["category"] and int(row.pack_units)==template["pack_units"] and int(row.stock)>0 and brand_line(row.name,row.category)==group]
-                config=add_flavor_candidates(config,group,candidates)
-            st.session_state.combo_config=config; st.session_state.combo_id=str(uuid.uuid4())[:8]; st.session_state.combo_number+=1
-            initial_lines=reconstruct_combo_lines(config,catalog); initial_totals=calculate_order(initial_lines,bags_lines,extras_lines,discount)
-            entry=order_snapshot(st.session_state.combo_id,st.session_state.combo_number,kids,profile,config,st.session_state.bags_selection,st.session_state.extras_selection,initial_totals)
-            st.session_state.history=append_history(st.session_state.history,entry); st.rerun()
+        if st.button("GENERAR COMBO",type="primary",disabled=not fresh["ok"] or st.session_state.generating,use_container_width=True):
+            st.session_state.generating=True
+            try:
+                with st.spinner("Generando tu combo..."):
+                    clear_combo_widgets(); combo=generate_combo(allowed_products,allowed_rules,allowed_images,int(kids),profile); config=build_combo_config(combo)
+                    for group in {x["flavor_group"] for x in config["items"].values() if x["mode"]=="compensated"}:
+                        template=next(x for x in config["items"].values() if x.get("flavor_group")==group)
+                        candidates=[{"sku":row.sku} for row in catalog.itertuples() if row.category==template["category"] and int(row.pack_units)==template["pack_units"] and int(row.stock)>0 and brand_line(row.name,row.category)==group]
+                        config=add_flavor_candidates(config,group,candidates)
+                    st.session_state.combo_config=config; st.session_state.combo_id=str(uuid.uuid4())[:8]; st.session_state.combo_number+=1
+                    st.session_state.combo_kids=int(kids); st.session_state.combo_profile=profile
+                    initial_lines=reconstruct_combo_lines(config,catalog); initial_totals=calculate_order(initial_lines,bags_lines,extras_lines,discount)
+                    entry=order_snapshot(st.session_state.combo_id,st.session_state.combo_number,kids,profile,config,st.session_state.bags_selection,st.session_state.extras_selection,initial_totals)
+                    st.session_state.history=append_history(st.session_state.history,entry)
+            finally: st.session_state.generating=False
+            st.rerun()
         if has_combo():
             st.subheader("Tu combo está listo"); render_combo_editor(catalog)
             favorite=st.session_state.combo_id in st.session_state.favorites

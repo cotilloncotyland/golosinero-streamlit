@@ -7,9 +7,9 @@ import pandas as pd
 
 from services.order_service import (
     active_selection, add_flavor_candidates, append_favorite, append_history, build_combo_config,
-    build_whatsapp_message, calculate_order, navigate, normalize_kids, order_snapshot,
+    build_whatsapp_message, calculate_order, format_drive_modified_time, navigate, normalize_kids, order_snapshot,
     rebalance_flavor, reconstruct_combo_lines, reconstruct_lines, remove_product,
-    restore_product, restore_snapshot, round_money, set_free_quantity,
+    restore_product, restore_snapshot, round_money, safe_kids_value, set_free_quantity,
 )
 
 
@@ -90,6 +90,11 @@ class OrderFlowTests(unittest.TestCase):
         self.assertEqual(normalize_kids(20),20); self.assertEqual(normalize_kids(21),21)
         self.assertEqual(normalize_kids(0),1); self.assertEqual(normalize_kids(999),150)
 
+    def test_kids_widget_can_be_absent_or_invalid(self):
+        self.assertEqual(safe_kids_value({"kids":37}),37)
+        self.assertEqual(safe_kids_value({"kids":37,"kids_widget":""}),37)
+        self.assertEqual(safe_kids_value({}),20)
+
     def test_favorite_snapshot_preserves_distribution_and_removed_item(self):
         changed,_=rebalance_flavor(self.config,"J1",20,{"J1":30,"J2":30,"J3":30})
         changed=remove_product(changed,"R1")
@@ -125,6 +130,18 @@ class OrderFlowTests(unittest.TestCase):
         restored["combo_config"]["items"]["J1"]["quantity"]=1
         self.assertNotEqual(snapshot["config"]["items"]["J1"]["quantity"],1)
 
+    def test_previous_combo_can_be_restored_twice_with_its_kids(self):
+        totals=calculate_order(reconstruct_combo_lines(self.config,self.catalog),[],[],5)
+        first=order_snapshot("first",1,27,"economico",self.config,{}, {},totals,"2026-07-15T10:00")
+        second=order_snapshot("second",2,45,"premium",self.config,{}, {},totals,"2026-07-15T10:01")
+        self.assertEqual(restore_snapshot(second)["kids"],45)
+        self.assertEqual(restore_snapshot(first)["kids"],27)
+        self.assertEqual(restore_snapshot(first)["kids"],27)
+
+    def test_drive_timestamp_converts_utc_once(self):
+        self.assertEqual(format_drive_modified_time("2026-07-15T16:05:00Z"),"15/07/2026 13:05")
+        self.assertEqual(format_drive_modified_time("2026-07-15T13:05:00-03:00"),"15/07/2026 13:05")
+
     def test_whatsapp_uses_the_same_totals(self):
         combo=reconstruct_combo_lines(self.config,self.catalog); bags=reconstruct_lines({"B1":1},self.catalog,"bolsas"); extras=reconstruct_lines({"E1":1},self.catalog,"extras")
         totals=calculate_order(combo,bags,extras,5); message=build_whatsapp_message(combo,bags,extras,totals,27,"premium")
@@ -140,6 +157,9 @@ class OrderFlowTests(unittest.TestCase):
         self.assertIn('if st.session_state.step==1:',source)
         self.assertIn('render_snapshot_detail(favorite,catalog,discount)',source)
         self.assertIn('render_snapshot_detail(entry,catalog,discount)',source)
+        self.assertIn('disabled=not has_combo()',source)
+        self.assertIn('st.checkbox("Quitar del combo"',source)
+        self.assertNotIn('st.number_input("Cantidad de invitados"',source)
         self.assertNotIn('"Ver este combo"',source)
         self.assertNotIn('"Quitar de favoritos"',source)
         self.assertNotIn("session_state.pdf",source)
