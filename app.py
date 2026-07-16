@@ -421,13 +421,13 @@ with main:
             pdf=build_pdf(combo_lines,bags_lines,extras_lines,totals,st.session_state.kids,st.session_state.profile,company,removed,ROOT/"assets/cotyland_logo.png")
             st.download_button("Descargar PDF individual",pdf,file_name=f"pedido_cotyland_{st.session_state.combo_id}.pdf",mime="application/pdf",type="primary",use_container_width=True); del pdf
         with pdf_right:
-          if st.button("Preparar PDF comparativo",type="primary",disabled=not bool(st.session_state.favorites),use_container_width=True):
+          if st.button("Preparar PDF comparativo",type="primary",disabled=not bool(st.session_state.history),use_container_width=True):
             comparison_payload=[]
-            for entry in list(st.session_state.favorites.values())[-10:]:
+            for entry in reversed(st.session_state.history[-10:]):
                 combo_f,bags_f,extras_f,totals_f=snapshot_payload(entry,catalog,discount)
                 comparison_payload.append({**entry,"combo":combo_f,"bags":bags_f,"extras":extras_f,"totals":totals_f,"removed_product":logical_description(entry["config"].get("removed_product_key"),catalog,entry["config"])})
             comparison=build_comparison_pdf(comparison_payload,company,ROOT/"assets/cotyland_logo.png")
-            st.download_button("Descargar PDF comparativo",comparison,file_name="favoritos_cotyland.pdf",mime="application/pdf",type="primary",use_container_width=True); del comparison
+            st.download_button("Descargar comparación de los últimos combos",comparison,file_name="ultimos_combos_cotyland.pdf",mime="application/pdf",type="primary",use_container_width=True); del comparison
         back_combo,back_bags,back_extras=st.columns(3)
         if back_combo.button("Editar Combo",type="primary",use_container_width=True): st.session_state.step=1; st.rerun()
         if back_bags.button("Editar Bolsitas",type="primary",use_container_width=True): st.session_state.step=2; st.rerun()
