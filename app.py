@@ -277,11 +277,12 @@ def render_price_summary(totals):
     <div class="cash-total"><span>EFECTIVO O TRANSFERENCIA</span><strong>{money(totals['total_efectivo_transferencia'])}</strong><small>10% de descuento adicional</small></div>''',unsafe_allow_html=True)
 
 def render_final_lines(title,lines):
-    st.subheader(title)
-    if not lines: st.caption("Sin productos seleccionados"); return
-    with st.container(border=True):
-        for line in lines:
-            st.markdown(f'<div class="final-row">{image_markup(line.get("image_url"),line["name"],True)}<div class="final-qty">{int(line["quantity"])}×</div><div class="final-name">{escape(str(line["name"]))}</div><div class="final-price">{money(line["subtotal"])}</div></div>',unsafe_allow_html=True)
+    st.markdown(f'<div class="final-section-title">{escape(title)}</div>',unsafe_allow_html=True)
+    if not lines:
+        st.markdown('<div class="final-empty">Sin productos seleccionados</div>',unsafe_allow_html=True)
+        return
+    for line in lines:
+        st.markdown(f'<div class="final-row">{image_markup(line.get("image_url"),line["name"],True)}<div class="final-qty">{int(line["quantity"])}×</div><div class="final-name">{escape(str(line["name"]))}</div><div class="final-price">{money(line["subtotal"])}</div></div>',unsafe_allow_html=True)
 
 def render_snapshot_lines(lines):
     for line in lines:
@@ -398,7 +399,8 @@ with main:
 
     else:
         render_heading(4,"Finalizá el pedido","Revisá el resumen, prepará el PDF y comunicate con Cotyland.")
-        render_final_lines("Golosinas del combo",combo_lines); render_final_lines("Bolsitas",bags_lines); render_final_lines("Extras",extras_lines)
+        with st.container(border=True,key="final_order_card"):
+            render_final_lines("Golosinas del combo",combo_lines); render_final_lines("Bolsitas",bags_lines); render_final_lines("Extras",extras_lines)
         removed=logical_description(st.session_state.combo_config.get("removed_product_key"),catalog,st.session_state.combo_config)
         pdf_left,pdf_right=st.columns(2)
         with pdf_left:
