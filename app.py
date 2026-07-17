@@ -60,7 +60,7 @@ def get_drive_service():
 @st.cache_resource
 def get_last_valid_store(): return LastValidStore()
 
-@st.cache_data(ttl=900,max_entries=6,show_spinner=False)
+@st.cache_data(ttl=10,max_entries=6,show_spinner=False)
 def get_source_metadata(file_id,source_type):
     started=time.perf_counter(); service=get_drive_service()
     metadata=api_metadata(service,file_id) if service else (public_sheet_metadata(file_id) if source_type=="rules" else public_drive_metadata(file_id))
