@@ -66,6 +66,12 @@ def get_source_metadata(file_id,source_type):
     metadata=api_metadata(service,file_id) if service else (public_sheet_metadata(file_id) if source_type=="rules" else public_drive_metadata(file_id))
     return metadata,time.perf_counter()-started
 
+@st.cache_data(ttl=55,max_entries=2,show_spinner=False)
+def get_images_metadata(file_id):
+    started=time.perf_counter(); service=get_drive_service()
+    metadata=api_metadata(service,file_id) if service else public_drive_metadata(file_id)
+    return metadata,time.perf_counter()-started
+
 @st.cache_data(max_entries=4,show_spinner="Actualizando stock y precios...")
 def load_stock_version(file_id,version):
     started=time.perf_counter(); service=get_drive_service(); content=api_download(service,file_id) if service else public_drive_download(file_id)
@@ -90,7 +96,7 @@ def reduced_catalog(products,rules,images,stock_version,rules_version,images_ver
 def resolve_source(key,file_id,source_type,loader,fallback_loader):
     store=get_last_valid_store()
     try:
-        metadata,metadata_seconds=get_source_metadata(file_id,source_type); version=metadata_version(metadata); cached=store.get(key)
+        metadata,metadata_seconds=(get_images_metadata(file_id) if source_type=="images" else get_source_metadata(file_id,source_type)); version=metadata_version(metadata); cached=store.get(key)
         if not needs_refresh(cached,version): return cached[0],version,"Google Drive",None,{"metadata":metadata_seconds,"download":0.0}
         value,download_seconds=loader(file_id,version); store.set(key,(value,version)); store.set(f"{key}_metadata",metadata)
         return value,version,"Google Drive",None,{"metadata":metadata_seconds,"download":download_seconds}
